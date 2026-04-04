@@ -23,9 +23,11 @@ app.post('/chat', async (req, res) => {
       }),
     });
     const data = await response.json();
-    console.log('응답데이터:', JSON.stringify(data));
-    res.json({ reply: data.content[0].text });
+    console.log('전체응답:', JSON.stringify(data));
+    const reply = data?.content?.[0]?.text || '응답없음';
+    res.json({ reply });
   } catch (e) {
+    console.log('에러:', e.message);
     res.status(500).json({ error: e.message });
   }
 });
