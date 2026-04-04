@@ -1,4 +1,3 @@
-const OPENAI_KEY = process.env.OPENAI_API_KEY?.replace(/['"]/g, '');
 const express = require('express');
 const cors = require('cors');
 
@@ -9,11 +8,12 @@ app.use(express.json());
 app.post('/chat', async (req, res) => {
   const { messages, system } = req.body;
   try {
+    const OPENAI_KEY = process.env.OPENAI_API_KEY?.replace(/['"]/g, '');
     const response = await fetch('https://api.openai.com/v1/chat/completions', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'Authorization': `Bearer ${OPENAI_API_KEY}`,
+        'Authorization': `Bearer ${OPENAI_KEY}`,
       },
       body: JSON.stringify({
         model: 'gpt-4o-mini',
@@ -39,4 +39,8 @@ app.get('/test', (req, res) => {
   res.json({ hasKey: !!key, keyStart: key ? key.substring(0, 10) : '없음' });
 });
 
-app.listen(3000, () => console.log('서버 실행중 port 3000'));
+if (require.main === module) {
+  app.listen(3000, () => console.log('서버 실행중 port 3000'));
+}
+
+module.exports = app;
