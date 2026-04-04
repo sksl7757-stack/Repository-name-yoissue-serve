@@ -32,4 +32,12 @@ app.post('/chat', async (req, res) => {
   }
 });
 
+app.get('/test', (req, res) => {
+  const key = process.env.ANTHROPIC_API_KEY;
+  res.json({ 
+    hasKey: !!key, 
+    keyStart: key ? key.substring(0, 10) : '없음'
+  });
+});
+
 app.listen(3000, () => console.log('서버 실행중 port 3000'));
