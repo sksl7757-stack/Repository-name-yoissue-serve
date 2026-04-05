@@ -34,6 +34,16 @@ app.post('/chat', async (req, res) => {
   }
 });
 
+app.get('/today-news', (req, res) => {
+  try {
+    delete require.cache[require.resolve('./today-news.json')];
+    const news = require('./today-news.json');
+    res.json(news);
+  } catch (e) {
+    res.status(500).json({ error: 'today-news.json을 읽을 수 없습니다.' });
+  }
+});
+
 app.get('/test', (req, res) => {
   const key = process.env.OPENAI_API_KEY;
   res.json({ hasKey: !!key, keyStart: key ? key.substring(0, 10) : '없음' });
