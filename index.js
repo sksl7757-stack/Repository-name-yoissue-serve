@@ -95,6 +95,42 @@ function buildSystemPrompt(character, memory) {
   return basePrompt + newsDetailBlock + memoryBlock + commonPrinciples + lengthRule;
 }
 
+app.post('/chat-opening', async (req, res) => {
+  const { character, memory } = req.body;
+  try {
+    const OPENAI_KEY = process.env.OPENAI_API_KEY?.replace(/['"]/g, '');
+    const baseSystem = buildSystemPrompt(character, memory);
+    const systemWithFormat = baseSystem + `\n\n【출력 형식】 아래 JSON으로만 반환. 다른 텍스트 없이:\n{"opening": "뉴스 보기 전 궁금증 유발 한 줄", "comment": "뉴스 카드 본 후 생활 영향/공감 한 줄"}`;
+
+    const response = await fetch('https://api.openai.com/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${OPENAI_KEY}`,
+      },
+      body: JSON.stringify({
+        model: 'gpt-4o-mini',
+        max_tokens: 200,
+        response_format: { type: 'json_object' },
+        messages: [
+          { role: 'system', content: systemWithFormat },
+          { role: 'user', content: '오늘 뉴스 오프닝이랑 코멘트 만들어줘' },
+        ],
+      }),
+    });
+    const data = await response.json();
+    console.log('chat-opening 응답:', JSON.stringify(data));
+    const result = JSON.parse(data?.choices?.[0]?.message?.content || '{}');
+    res.json({
+      opening: result.opening || '',
+      comment: result.comment || '',
+    });
+  } catch (e) {
+    console.log('chat-opening 에러:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
 app.post('/chat', async (req, res) => {
   const { messages, character, memory } = req.body;
   try {
