@@ -1,9 +1,33 @@
 const express = require('express');
 const cors = require('cors');
+const fs = require('fs');
+const path = require('path');
 
 const app = express();
 app.use(cors());
 app.use(express.json());
+
+// Vercel 환경에서 /tmp는 인스턴스 내 ephemeral 저장소
+const TOKENS_PATH = '/tmp/tokens.json';
+
+function readTokens() {
+  try { return JSON.parse(fs.readFileSync(TOKENS_PATH, 'utf-8')); }
+  catch { return []; }
+}
+
+// 두 캐릭터의 태그별 오프닝 멘트 (클라이언트 openingMessages.ts와 동일)
+const OPENING_MESSAGES = {
+  경제: ['이거 은근 생활비랑 연결되는 얘긴데', '요즘 물가 생각하면 좀 신경 쓰이는 얘기야', '이거 우리 지갑이랑 관련 있을 수도 있어', '오늘 경제 쪽 포인트 하나 있는데', '결론부터 말하면 생활에 영향 있을 가능성 있음'],
+  정치: ['이거 좀 복잡한 얘긴데', '이거 은근 우리랑 연결되는 얘기더라', '오늘 정치 쪽 흐름 하나 짚어보면', '이건 구조 알면 이해됨', '이건 배경 알아야 이해되는 내용임'],
+  사회: ['이거 좀 마음에 걸리는 얘긴데', '이거 은근 주변이랑 연결되는 얘기야', '오늘 사회 쪽 이슈 하나 있는데', '이건 한 번 짚어볼 필요 있음', '이건 영향 범위 생각해볼 필요 있음'],
+  IT: ['이거 생각보다 우리 생활이랑 가깝더라', '이거 은근 흥미로운 얘기야', '오늘 IT 쪽 포인트 하나 있는데', '이건 알아두면 도움될 가능성 있음', '이건 앞으로 영향 있을 내용임'],
+  국제: ['이거 멀어 보여도 은근 우리랑 연결돼', '이거 생각보다 가까운 얘기일 수도 있어', '오늘 국제 흐름 하나 짚어보면', '이건 알아두면 나쁘지 않음', '이건 배경 알면 이해됨'],
+  금융: ['이거 돈이랑 직접 연결되는 얘긴데', '이거 은근 중요한 얘기더라', '오늘 금융 쪽 포인트 하나 있는데', '이건 한 번 짚고 넘어갈 필요 있음', '결론부터 말하면 영향 있을 가능성 있음'],
+  문화: ['이거 은근 재밌는 얘기야', '이거 좀 흥미롭더라', '오늘 문화 쪽 이슈 하나 있는데', '이건 관심 있으면 볼 만한 내용임', '이건 흐름 보면 이해됨'],
+  환경: ['이거 생각보다 가까운 얘기야', '이거 은근 신경 쓰이는 흐름이긴 해', '오늘 환경 쪽 포인트 하나 있는데', '이건 장기적으로 영향 있을 내용임', '이건 알아두면 나쁘지 않음'],
+  건강: ['이거 몸이랑 연결되는 얘긴데', '이거 은근 신경 쓰일 수도 있겠다', '오늘 건강 쪽 이슈 하나 있는데', '이건 생활이랑 직접 연결된 내용임', '이건 알아두면 도움될 가능성 있음'],
+  부동산: ['이거 집이랑 연결되는 얘긴데', '이거 은근 생활이랑 가까운 얘기야', '오늘 부동산 쪽 포인트 하나 있는데', '이건 주거 비용이랑 연결된 내용임', '결론부터 말하면 영향 있을 가능성 있음'],
+};
 
 const CHARACTER_PROMPTS = {
   하나: `너는 요잇슈 앱의 캐릭터 하나야 🌸.
@@ -206,6 +230,50 @@ ${JSON.stringify(messages || [], null, 2)}`;
     res.json(result);
   } catch (e) {
     console.log('analyze-memory 에러:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.post('/register-token', (req, res) => {
+  const { token } = req.body;
+  if (!token) return res.status(400).json({ error: 'token required' });
+  const tokens = readTokens();
+  if (!tokens.includes(token)) {
+    tokens.push(token);
+    try { fs.writeFileSync(TOKENS_PATH, JSON.stringify(tokens), 'utf-8'); } catch {}
+  }
+  res.json({ ok: true, total: tokens.length });
+});
+
+app.post('/send-notifications', async (req, res) => {
+  const { title, tag } = req.body;
+  const tokens = readTokens();
+  if (tokens.length === 0) return res.json({ sent: 0 });
+
+  const rawTag = (tag || '').split('· ').pop()?.trim();
+  const pool = OPENING_MESSAGES[rawTag] || [];
+  const body = pool.length > 0
+    ? pool[Math.floor(Math.random() * pool.length)]
+    : '오늘의 이슈가 도착했어요!';
+
+  const messages = tokens.map(token => ({
+    to: token,
+    title: '오늘의 픽 도착 🔔',
+    body,
+    data: { tag },
+  }));
+
+  try {
+    const response = await fetch('https://exp.host/--/api/v2/push/send', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+      body: JSON.stringify(messages),
+    });
+    const result = await response.json();
+    console.log('푸시 발송 결과:', JSON.stringify(result));
+    res.json({ sent: tokens.length, body });
+  } catch (e) {
+    console.log('푸시 발송 에러:', e.message);
     res.status(500).json({ error: e.message });
   }
 });

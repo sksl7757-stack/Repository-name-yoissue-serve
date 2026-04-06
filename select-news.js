@@ -222,6 +222,21 @@ async function main() {
   const outPath = path.join(__dirname, 'today-news.json');
   fs.writeFileSync(outPath, JSON.stringify(selected, null, 2), 'utf-8');
   console.log(`  저장 완료: ${outPath}`);
+
+  // 저장된 토큰들에 푸시 알림 발송
+  const SERVER_URL = 'https://repository-name-yoissue-serve.vercel.app';
+  try {
+    const notiRes = await fetch(`${SERVER_URL}/send-notifications`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ title: selected.title, tag: selected.tag }),
+    });
+    const notiData = await notiRes.json();
+    console.log(`  푸시 알림 발송: ${notiData.sent ?? 0}명`);
+  } catch (e) {
+    console.warn('  푸시 알림 발송 실패:', e.message);
+  }
+
   console.log('[완료]');
 }
 
