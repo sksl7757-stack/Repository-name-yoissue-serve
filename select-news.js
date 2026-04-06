@@ -63,12 +63,39 @@ async function fetchFullTitle(url, fallback) {
   }
 }
 
+async function fetchArticleContent(url) {
+  try {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 4000);
+    const res = await fetch(url, { signal: controller.signal, headers: { 'User-Agent': 'Mozilla/5.0' } });
+    clearTimeout(timer);
+    if (!res.ok) return null;
+    const html = await res.text();
+
+    // og:description 시도
+    const ogMatch = html.match(/<meta[^>]+property=["']og:description["'][^>]+content=["']([^"']+)["']/i)
+      || html.match(/<meta[^>]+content=["']([^"']+)["'][^>]+property=["']og:description["']/i);
+    if (ogMatch) return ogMatch[1].trim().slice(0, 1000);
+
+    // <p> 태그 본문 추출
+    const paragraphs = [...html.matchAll(/<p[^>]*>([\s\S]*?)<\/p>/gi)]
+      .map(m => stripHtml(m[1]).trim())
+      .filter(t => t.length > 30)
+      .join(' ');
+    if (paragraphs.length > 0) return paragraphs.slice(0, 1000);
+
+    return null;
+  } catch {
+    return null;
+  }
+}
+
 async function selectNewsWithGPT(newsList) {
   const today = new Date().toISOString().slice(0, 10);
-  // 상위 20건만 전달 (토큰 절약)
+  // 상위 20건만 전달, content_preview 포함
   const limited = newsList.slice(0, 20).map(item => ({
     title: item.title,
-    description: item.description,
+    content_preview: item.content.slice(0, 300),
     link: item.link,
   }));
 
@@ -170,10 +197,26 @@ async function main() {
     }));
   }
 
+  // 원문 본문 크롤링 (병렬) — 실패하거나 짧은 기사 제외
+  console.log('  원문 크롤링 중...');
+  const crawled = await Promise.all(
+    unique.map(async item => {
+      const content = await fetchArticleContent(item.link);
+      return content ? { ...item, content } : null;
+    })
+  );
+  const withContent = crawled.filter(Boolean);
+  console.log(`  크롤링 성공: ${withContent.length}건 / ${unique.length}건`);
+  if (withContent.length === 0) throw new Error('크롤링 성공한 뉴스가 없습니다.');
+
   // GPT로 핫이슈 선정
   console.log('  GPT-4o-mini 채점 중...');
-  const selected = await selectNewsWithGPT(unique);
+  const selected = await selectNewsWithGPT(withContent);
   console.log(`  선정: [${selected.score}점] ${selected.title}`);
+
+  // 선정된 뉴스의 크롤링 본문 첨부
+  const matched = withContent.find(item => item.link === selected.link);
+  if (matched) selected.content = matched.content;
 
   // today-news.json 저장
   const outPath = path.join(__dirname, 'today-news.json');
