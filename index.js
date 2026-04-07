@@ -124,7 +124,7 @@ app.post('/chat-opening', async (req, res) => {
   try {
     const OPENAI_KEY = process.env.OPENAI_API_KEY?.replace(/['"]/g, '');
     const baseSystem = buildSystemPrompt(character, memory);
-    const systemWithFormat = baseSystem + `\n\n【출력 형식】 아래 JSON으로만 반환. 다른 텍스트 없이:\n{"opening": "뉴스 보기 전 궁금증 유발 한 줄", "comment": "뉴스 카드 본 후 생활 영향/공감 한 줄"}`;
+    const systemWithFormat = baseSystem + `\n\n【출력 형식】 아래 JSON으로만 반환. 다른 텍스트 없이:\n{"opening": "뉴스 보기 전 궁금증 유발 한 줄", "comment": "뉴스 카드 본 후 생활 영향/공감 한 줄. 반드시 유저가 자연스럽게 대답하고 싶어지는 열린 질문으로 끝낼 것. 캐릭터 말투에 맞게. 예) 하나: \\"이거 은근 우리 생활이랑 연결되는 얘긴데, 너는 이런 거 평소에 신경 쓰는 편이야?\\", 준혁: \\"결론적으로 영향 있을 가능성 높음. 근데 너는 이 상황 어떻게 보냐?\\""}}`;
 
     const response = await fetch('https://api.openai.com/v1/chat/completions', {
       method: 'POST',
