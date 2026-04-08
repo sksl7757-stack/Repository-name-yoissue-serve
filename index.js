@@ -79,7 +79,10 @@ app.post('/chat', async (req, res) => {
       delete require.cache[require.resolve('./today-news.json')];
       newsTitle = require('./today-news.json').title || '';
     } catch {}
-    const topicStatus = filterTopic(userInput, newsTitle);
+    let topicStatus = 'ON_TOPIC';
+    if (phase === 'CHAT') {
+      topicStatus = filterTopic(userInput, newsTitle);
+    }
 
     // 3. generator 실행 (말투/스타일만 담당)
     const rawReply = await generateReply({ character, messages, memory });
