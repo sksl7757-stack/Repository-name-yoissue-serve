@@ -53,7 +53,9 @@ function buildSystemPrompt(character, memory) {
 
   const commonPrinciples = `\n\n【공통 원칙】 전문용어 금지. 사람 말처럼 바꿔서 전달.`;
 
-  return basePrompt + newsDetailBlock + memoryBlock + commonPrinciples;
+  const hardRule = `\n\n【출력 강제 규칙 — 반드시 지킬 것】\n\n* 첫 문장은 반드시 "반응"이어야 한다 (설명 금지)\n\n* 반응 없이 설명 시작하면 틀린 답변이다\n\n* 답변 구조는 항상:\n  1. 반응 (감정 or 판단)\n  2. 이어서 새로운 정보/관점\n\n* 1번 없이 2번만 하면 안 된다\n\n* 설명만 하는 답변은 무조건 실패`;
+
+  return basePrompt + newsDetailBlock + memoryBlock + commonPrinciples + hardRule;
 }
 
 async function generateReply({ character, messages, memory }) {
