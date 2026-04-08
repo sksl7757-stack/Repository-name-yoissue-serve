@@ -1,17 +1,21 @@
 const path = require('path');
 const fs = require('fs');
 
-// .env를 fs로 직접 읽어 파싱 (dotenvx 암호화 우회)
+// .env를 fs로 직접 읽어 파싱 (dotenvx 암호화 우회). 파일 없으면 process.env fallback.
 const envPath = path.join(__dirname, '.env');
-fs.readFileSync(envPath, 'utf-8').split('\n').forEach(line => {
-  const trimmed = line.trim();
-  if (!trimmed || trimmed.startsWith('#')) return;
-  const eq = trimmed.indexOf('=');
-  if (eq === -1) return;
-  const key = trimmed.slice(0, eq).trim();
-  const val = trimmed.slice(eq + 1).trim().replace(/^['"]|['"]$/g, '');
-  if (key) process.env[key] = val;
-});
+if (fs.existsSync(envPath)) {
+  fs.readFileSync(envPath, 'utf-8').split('\n').forEach(line => {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith('#')) return;
+    const eq = trimmed.indexOf('=');
+    if (eq === -1) return;
+    const key = trimmed.slice(0, eq).trim();
+    const val = trimmed.slice(eq + 1).trim().replace(/^['"]|['"]$/g, '');
+    if (key) process.env[key] = val;
+  });
+} else {
+  console.log('.env 파일 없음 — process.env(GitHub Secrets) 사용');
+}
 
 const NAVER_ID = process.env.NAVER_CLIENT_ID;
 const NAVER_SECRET = process.env.NAVER_CLIENT_SECRET;
