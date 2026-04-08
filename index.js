@@ -71,6 +71,16 @@ app.post('/chat', async (req, res) => {
   try {
     // PERSPECTIVE_NEXT: 시스템 트리거 — topic 검사 없이 바로 생성
     if (type === 'PERSPECTIVE_NEXT') {
+      // perspectiveStep은 클라이언트가 이미 증가시켜서 전송 (서버는 stateless)
+      if (perspectiveStep > 2) {
+        return res.json({
+          message: character === '하나'
+            ? '나 이 얘기는 여기까지면 충분한 것 같아 🌸 내일 또 같이 보자'
+            : '이 정도면 핵심은 다 봤어. 내일 다시 보자',
+          question: null,
+          end: true,
+        });
+      }
       const rawReply = await generateReply({ character, messages, memory, perspectiveStep, isPerspectiveRequest: true });
       const validatedReply = validate({ reply: rawReply, phase: 'CHAT', topicStatus: 'ON_TOPIC', character });
       return res.json(buildResponse({ message: validatedReply.message, question: validatedReply.question }));
