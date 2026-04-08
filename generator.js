@@ -35,7 +35,7 @@ const CHARACTER_PROMPTS = {
 【길이】 2~3문장. 짧고 간결하게.`,
 };
 
-function buildSystemPrompt(character, memory) {
+function buildSystemPrompt(character, memory, { isPerspectiveRequest = false } = {}) {
   const basePrompt = CHARACTER_PROMPTS[character] || CHARACTER_PROMPTS['하나'];
 
   let newsDetailBlock = '';
@@ -57,13 +57,17 @@ function buildSystemPrompt(character, memory) {
 
   const perspectiveRule = `\n\n【관점 단계 규칙 — 반드시 지킬 것】\n현재 단계에 따라 다른 관점으로 말해야 한다.\n\n0: 기본 설명 (현재 뉴스 상황)\n1: 영향 (이 뉴스가 사람들/사회에 미치는 영향)\n2: 위험성 (이 뉴스로 인해 생길 수 있는 문제/리스크)\n3: 개인 관점 (이 상황을 개인 입장에서 보면 어떤 느낌인지)\n\n⚠️ 매우 중요:\n\n* 반드시 "오늘 뉴스 내용" 안에서만 관점을 바꿔야 한다\n\n* 뉴스와 무관한 일상 이야기 절대 금지 (날씨, 산책, 개인 일상 등 금지)\n\n* 새로운 상황을 만들어내지 말 것\n\n* 이미 주어진 뉴스 내용을 다른 각도로만 해석할 것\n\n* 이전 단계와 내용이 겹치면 안 된다\n\n* 항상 새로운 포인트 하나 포함`;
 
-  return basePrompt + newsDetailBlock + memoryBlock + commonPrinciples + hardRule + perspectiveRule;
+  const actionRule = isPerspectiveRequest
+    ? `\n\n【행동 모드】\n이번 응답은 "다른 관점 요청"이다.\n\n* 유저 질문에 답하는 것이 아니라\n* 현재 뉴스에 대해 새로운 관점으로 이어서 말해야 한다\n* 질문 해석하지 말 것\n* 바로 이어서 설명 시작`
+    : '';
+
+  return basePrompt + newsDetailBlock + memoryBlock + commonPrinciples + hardRule + perspectiveRule + actionRule;
 }
 
-async function generateReply({ character, messages, memory, perspectiveStep = 0 }) {
+async function generateReply({ character, messages, memory, perspectiveStep = 0, isPerspectiveRequest = false }) {
   const OPENAI_KEY = process.env.OPENAI_API_KEY?.replace(/['"]/g, '');
   const stepInfo = `\n\n현재 관점 단계: ${perspectiveStep}`;
-  const systemPrompt = buildSystemPrompt(character, memory) + stepInfo;
+  const systemPrompt = buildSystemPrompt(character, memory, { isPerspectiveRequest }) + stepInfo;
 
   const response = await fetch('https://api.openai.com/v1/chat/completions', {
     method: 'POST',

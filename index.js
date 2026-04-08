@@ -67,8 +67,15 @@ app.post('/chat-opening', async (req, res) => {
 
 // /chat — harness orchestration
 app.post('/chat', async (req, res) => {
-  const { messages, character, memory, perspectiveStep = 0 } = req.body;
+  const { type, messages, character, memory, perspectiveStep = 0 } = req.body;
   try {
+    // PERSPECTIVE_NEXT: 시스템 트리거 — topic 검사 없이 바로 생성
+    if (type === 'PERSPECTIVE_NEXT') {
+      const rawReply = await generateReply({ character, messages, memory, perspectiveStep, isPerspectiveRequest: true });
+      const validatedReply = validate({ reply: rawReply, phase: 'CHAT', topicStatus: 'ON_TOPIC', character });
+      return res.json(buildResponse({ message: validatedReply.message, question: validatedReply.question }));
+    }
+
     // 1. state 읽기 (코드에서만 결정 — LLM 관여 없음)
     const { phase, questionAsked } = getState(messages, perspectiveStep);
 
