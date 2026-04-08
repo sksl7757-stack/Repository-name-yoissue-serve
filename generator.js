@@ -42,11 +42,9 @@ function buildSystemPrompt(character, memory) {
   try {
     delete require.cache[require.resolve('./today-news.json')];
     const news = require('./today-news.json');
-    if (news.content && news.content.length >= 100) {
-      newsDetailBlock = `\n\n【뉴스 본문】\n${news.content}`;
-    } else if (Array.isArray(news.summary) && news.summary.length > 0) {
-      newsDetailBlock = `\n\n【뉴스 요약】\n${news.summary.join(' ')}`;
-    }
+    const summaryText = Array.isArray(news.summary) ? news.summary.join(' ') : '';
+    const bodyText = news.content && news.content.length >= 100 ? news.content : summaryText;
+    newsDetailBlock = `\n\n【오늘 뉴스 — 반드시 이 내용만 기반으로 답변할 것】\n제목: ${news.title}\n요약: ${summaryText}\n${bodyText ? `본문: ${bodyText}` : ''}\n\n⚠️ 이 뉴스 외 다른 뉴스·과거 사례 언급 절대 금지.`;
   } catch {}
 
   const memoryBlock = memory
