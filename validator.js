@@ -32,32 +32,33 @@ function stripQuestions(text) {
 /**
  * GPT 응답을 phase / topicStatus 기준으로 강제 수정.
  *
- * INIT  → LLM 질문 제거 후 코드 고정 질문 추가 (항상)
- * CHAT  → 질문 문장 무조건 제거
+ * INIT     → LLM 질문 제거 후 코드 고정 질문을 별도 필드로 반환
+ * CHAT     → 질문 문장 무조건 제거, question = null
  * OFF_TOPIC → 뉴스 주제 복귀 안내 메시지 반환
  *
  * @param {{ reply: string, phase: string, topicStatus: string, character: string }}
- * @returns {string}
+ * @returns {{ message: string, question: string|null }}
  */
 function validate({ reply, phase, topicStatus, character }) {
   // 1. 주제 이탈 → 리디렉션 (LLM 응답 무시)
   if (topicStatus === TOPIC.OFF) {
-    return OFF_TOPIC_REDIRECTS[character] || OFF_TOPIC_REDIRECTS['하나'];
+    const redirect = OFF_TOPIC_REDIRECTS[character] || OFF_TOPIC_REDIRECTS['하나'];
+    return { message: redirect, question: null };
   }
 
-  // 2. INIT → 질문 강제 생성 (LLM 질문 제거 + 코드 고정 질문 추가)
+  // 2. INIT → 설명(message) + 고정 질문(question) 분리 반환
   if (phase === PHASE.INIT) {
-    const base = stripQuestions(reply);
+    const message = stripQuestions(reply);
     const question = FORCED_QUESTIONS[character] || FORCED_QUESTIONS['하나'];
-    return base + ' ' + question;
+    return { message, question };
   }
 
-  // 3. CHAT → 질문 무조건 제거
+  // 3. CHAT → 질문 무조건 제거, question = null
   if (phase === PHASE.CHAT) {
-    return stripQuestions(reply);
+    return { message: stripQuestions(reply), question: null };
   }
 
-  return reply;
+  return { message: reply, question: null };
 }
 
 module.exports = { validate };
