@@ -24,6 +24,9 @@ const NAVER_ID = (process.env.NAVER_CLIENT_ID || '').replace(/[^\x20-\x7E]/g, ''
 const NAVER_SECRET = (process.env.NAVER_CLIENT_SECRET || '').replace(/[^\x20-\x7E]/g, '');
 const OPENAI_KEY = (process.env.OPENAI_API_KEY || '').replace(/['"]/g, '').replace(/[^\x20-\x7E]/g, '');
 
+console.log(`[키 확인] NAVER_ID: "${NAVER_ID.slice(0, 5)}..." (길이: ${NAVER_ID.length})`);
+console.log(`[키 확인] NAVER_SECRET: "${NAVER_SECRET.slice(0, 5)}..." (길이: ${NAVER_SECRET.length})`);
+
 const SEARCH_QUERIES = ['속보', '주요뉴스', '경제이슈', '사회이슈', '화제'];
 
 async function fetchNaverNews(query) {
