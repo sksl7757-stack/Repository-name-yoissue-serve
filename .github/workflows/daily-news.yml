@@ -1,0 +1,37 @@
+name: Daily News Selection
+
+on:
+  schedule:
+    - cron: '0 23 * * *'  # KST 오전 8시 (UTC 23:00 전날)
+  workflow_dispatch:       # 수동 실행 허용
+
+jobs:
+  select-news:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run select-news.js
+        env:
+          NAVER_CLIENT_ID: ${{ secrets.NAVER_CLIENT_ID }}
+          NAVER_CLIENT_SECRET: ${{ secrets.NAVER_CLIENT_SECRET }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: node select-news.js
+
+      - name: Commit and push today-news.json
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add today-news.json
+          git diff --cached --quiet || git commit -m "chore: 오늘의 뉴스 자동 업데이트 $(date +'%Y-%m-%d')"
+          git push
