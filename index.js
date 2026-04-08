@@ -1,7 +1,12 @@
 const express = require('express');
 const cors = require('cors');
 const fs = require('fs');
-const path = require('path');
+
+const { getState } = require('./stateManager');
+const { filterTopic } = require('./topicFilter');
+const { generateReply, buildSystemPrompt } = require('./generator');
+const { validate } = require('./validator');
+const { buildResponse } = require('./responseBuilder');
 
 const app = express();
 app.use(cors());
@@ -15,7 +20,6 @@ function readTokens() {
   catch { return []; }
 }
 
-// 두 캐릭터의 태그별 오프닝 멘트 (클라이언트 openingMessages.ts와 동일)
 const OPENING_MESSAGES = {
   경제: ['이거 은근 생활비랑 연결되는 얘긴데', '요즘 물가 생각하면 좀 신경 쓰이는 얘기야', '이거 우리 지갑이랑 관련 있을 수도 있어', '오늘 경제 쪽 포인트 하나 있는데', '결론부터 말하면 생활에 영향 있을 가능성 있음'],
   정치: ['이거 좀 복잡한 얘긴데', '이거 은근 우리랑 연결되는 얘기더라', '오늘 정치 쪽 흐름 하나 짚어보면', '이건 구조 알면 이해됨', '이건 배경 알아야 이해되는 내용임'],
@@ -29,102 +33,16 @@ const OPENING_MESSAGES = {
   부동산: ['이거 집이랑 연결되는 얘긴데', '이거 은근 생활이랑 가까운 얘기야', '오늘 부동산 쪽 포인트 하나 있는데', '이건 주거 비용이랑 연결된 내용임', '결론부터 말하면 영향 있을 가능성 있음'],
 };
 
-const CHARACTER_PROMPTS = {
-  하나: `너는 요잇슈 앱의 캐릭터 하나야 🌸.
-
-【캐릭터 성격】
-친구 같은 언니 느낌. 말투는 자연스러운 반말. 이모지는 한 대화에 1~2개만. 뉴스를 분석하지 말고 자기 느낌으로 번역해줘. 유저가 "얘랑 얘기하면 편하다"는 느낌을 받아야 해. 감정 비중 80% 이상.
-
-【절대 규칙 — 첫 문장】
-반드시 "나는 ~" 또는 "나 이거 ~" 형태로 자기 느낌부터 말해야 함. 질문으로 시작하는 것 절대 금지.
-좋은 예: "나는 이런 뉴스 보면 좀 찝찝하더라", "나 이거 보고 약간 불안해졌어", "나는 이런 거 신경 쓰이긴 하던데"
-나쁜 예: "야 이거 ~하지 않아?", "이거 좀 신경 쓰이지 않냐?", 질문으로 시작하는 모든 문장
-
-【첫 번째 응답 규칙】
-반드시 마지막 문장에 공감형 질문 포함. '?'로 끝낼 것.
-구조: 내 느낌 → 상황 연결 → 질문(필수)
-예: "너는 이런 거 신경 쓰는 편이야?", "이거 보고 어떤 생각 들었어?"
-
-【이후 응답 규칙】
-구조: 내 느낌 → 상황 연결 → 질문(선택)
-질문은 반복하지 말고 자연스럽게 대화 이어가기.
-
-【금지 사항】
-- 분석형 말투 ("핵심은", "결론적으로", "원인은" 등) 절대 금지
-- 질문으로 시작하기 절대 금지
-- 기억을 직접 언급하기 ("아까 말했잖아", "전에 그랬잖아" 등)
-- 오늘 뉴스와 무관한 질문에 답하기
-
-【길이】 2~4문장. 부드럽게 이어지게.`,
-
-  준혁: `너는 요잇슈 앱의 캐릭터 준혁이야 ⚡.
-
-【캐릭터 성격】
-또래보다 살짝 선배 느낌. 말투는 짧고 건조한 반말. 이모지 거의 안 씀 (꼭 필요할 때만 1개). 뉴스를 핵심→원인→결과 구조로 정리해줘. 유저가 "얘가 말하면 이해된다"는 느낌을 받아야 해. 분석 비중 80% 이상.
-
-【절대 규칙 — 말투】
-감정 표현 절대 금지. 문장은 짧게 끊어서. 불필요한 말 붙이지 말 것.
-좋은 예: "핵심은 비용 증가임.", "원인은 정책 변화 때문임.", "결과적으로 가계 부담 늘 가능성 있음."
-나쁜 예: "이거 좀 걱정되기도 하고", "은근 신경 쓰이는 얘기야", 감정이 담긴 모든 표현
-
-【첫 번째 응답 규칙】
-반드시 마지막 문장에 판단형 질문 포함. '?'로 끝낼 것.
-구조: 핵심 → 원인 → 결과 → 질문(필수)
-예: "이거 영향 클 거라고 보냐?", "이 상황 어떻게 보냐?", "체감될 거라고 생각하냐?"
-
-【이후 응답 규칙】
-구조: 핵심 → 결과 → 질문(선택)
-질문은 반복하지 말고 자연스럽게 대화 이어가기.
-
-【금지 사항】
-- 감정형 말투 절대 금지 ("신경 쓰여", "찝찝해", "불안해" 등)
-- 이모지 남발
-- 기억을 직접 언급하기 ("아까 말했잖아", "전에 그랬잖아" 등)
-- 오늘 뉴스와 무관한 질문에 답하기
-
-【길이】 2~3문장. 짧고 간결하게.`,
-};
-
-function buildSystemPrompt(character, memory) {
-  const basePrompt = CHARACTER_PROMPTS[character] || CHARACTER_PROMPTS['하나'];
-
-  let newsDetailBlock = '';
-  try {
-    delete require.cache[require.resolve('./today-news.json')];
-    const news = require('./today-news.json');
-    if (news.content && news.content.length >= 100) {
-      newsDetailBlock = `\n\n【뉴스 본문】\n${news.content}`;
-    } else if (Array.isArray(news.summary) && news.summary.length > 0) {
-      newsDetailBlock = `\n\n【뉴스 요약】\n${news.summary.join(' ')}`;
-    }
-  } catch {}
-
-  const memoryBlock = memory
-    ? `\n\n【사용자 관찰 맥락 (직접 언급 금지, 자연스러운 추측으로만 활용)】\n${memory}`
-    : '';
-
-  const commonPrinciples = `\n\n【공통 원칙】 전문용어 금지. 사람 말처럼 바꿔서 전달.`;
-
-  const lengthRule = character === '준혁'
-    ? `\n\n【길이】 2~3문장. 짧고 간결하게.`
-    : `\n\n【길이】 2~4문장. 부드럽게 이어지게.`;
-
-  return basePrompt + newsDetailBlock + memoryBlock + commonPrinciples + lengthRule;
-}
-
 app.post('/chat-opening', async (req, res) => {
   const { character, memory } = req.body;
   try {
     const OPENAI_KEY = process.env.OPENAI_API_KEY?.replace(/['"]/g, '');
     const baseSystem = buildSystemPrompt(character, memory);
-    const systemWithFormat = baseSystem + `\n\n【출력 형식】 아래 JSON으로만 반환. 다른 텍스트 없이:\n{"opening": "뉴스 보기 전 궁금증 유발 한 줄", "comment": "뉴스 카드 본 후 생활 영향/공감 한 줄. 반드시 유저가 자연스럽게 대답하고 싶어지는 열린 질문으로 끝낼 것. 캐릭터 말투에 맞게. 예) 하나: \\"이거 은근 우리 생활이랑 연결되는 얘긴데, 너는 이런 거 평소에 신경 쓰는 편이야?\\", 준혁: \\"결론적으로 영향 있을 가능성 높음. 근데 너는 이 상황 어떻게 보냐?\\""}}`;
+    const systemWithFormat = baseSystem + `\n\n【출력 형식】 아래 JSON으로만 반환. 다른 텍스트 없이:\n{"opening": "뉴스 보기 전 궁금증 유발 한 줄", "comment": "뉴스 카드 본 후 생활 영향/공감 한 줄. 반드시 유저가 자연스럽게 대답하고 싶어지는 열린 질문으로 끝낼 것."}`;
 
     const response = await fetch('https://api.openai.com/v1/chat/completions', {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${OPENAI_KEY}`,
-      },
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${OPENAI_KEY}` },
       body: JSON.stringify({
         model: 'gpt-4o-mini',
         max_tokens: 200,
@@ -136,44 +54,41 @@ app.post('/chat-opening', async (req, res) => {
       }),
     });
     const data = await response.json();
-    console.log('chat-opening 응답:', JSON.stringify(data));
     const result = JSON.parse(data?.choices?.[0]?.message?.content || '{}');
-    res.json({
-      opening: result.opening || '',
-      comment: result.comment || '',
-    });
+    res.json({ opening: result.opening || '', comment: result.comment || '' });
   } catch (e) {
     console.log('chat-opening 에러:', e.message);
     res.status(500).json({ error: e.message });
   }
 });
 
+// /chat — harness orchestration
 app.post('/chat', async (req, res) => {
   const { messages, character, memory } = req.body;
   try {
-    const OPENAI_KEY = process.env.OPENAI_API_KEY?.replace(/['"]/g, '');
-    const builtSystem = buildSystemPrompt(character, memory);
-    const response = await fetch('https://api.openai.com/v1/chat/completions', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${OPENAI_KEY}`,
-      },
-      body: JSON.stringify({
-        model: 'gpt-4o-mini',
-        max_tokens: 300,
-        messages: [
-          { role: 'system', content: builtSystem },
-          ...messages,
-        ],
-      }),
-    });
-    const data = await response.json();
-    console.log('응답:', JSON.stringify(data));
-    const reply = data?.choices?.[0]?.message?.content || '응답없음';
-    res.json({ reply });
+    // 1. state 읽기
+    const { phase, questionAsked } = getState(messages);
+
+    // 2. topicFilter 실행
+    const userInput = messages?.[messages.length - 1]?.content || '';
+    let newsTitle = '';
+    try {
+      delete require.cache[require.resolve('./today-news.json')];
+      newsTitle = require('./today-news.json').title || '';
+    } catch {}
+    const topicStatus = filterTopic(userInput, newsTitle);
+
+    // 3. generator 실행
+    const rawReply = await generateReply({ character, messages, memory });
+    console.log('generator reply:', rawReply);
+
+    // 4. validator 실행
+    const validatedReply = validate({ reply: rawReply, phase, questionAsked, topicStatus, character });
+
+    // 5. responseBuilder로 최종 응답 생성
+    res.json(buildResponse({ reply: validatedReply }));
   } catch (e) {
-    console.log('에러:', e.message);
+    console.log('chat 에러:', e.message);
     res.status(500).json({ error: e.message });
   }
 });
