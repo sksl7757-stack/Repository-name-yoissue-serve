@@ -100,6 +100,46 @@ async function fetchArticleContent(url) {
   }
 }
 
+async function generateReactions(title, content) {
+  const prompt = `다음 뉴스에 대해 두 캐릭터의 반응을 생성해줘.
+
+뉴스 제목: ${title}
+뉴스 내용: ${(content || '').slice(0, 500)}
+
+【준혁 (분석형 오빠)】
+- 이 뉴스가 왜 중요한지 포함해서 한 줄로 핵심 정리
+- 감정 표현 없이 객관적으로
+
+【하나 (공감형 언니)】
+- 이 뉴스를 본 유저에게 공감형 말투로 자연스럽게 질문
+- 마지막에 선택지 포함: 좋음 / 모르겠음 / 걱정됨
+
+아래 JSON 형식으로만 응답해:
+{
+  "junhyuk": "준혁의 분석 한 줄",
+  "hana": "하나의 공감 질문 (선택지 포함)"
+}`;
+
+  const res = await fetch('https://api.openai.com/v1/chat/completions', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${OPENAI_KEY}`,
+    },
+    body: JSON.stringify({
+      model: 'gpt-4o-mini',
+      max_tokens: 300,
+      temperature: 0.7,
+      response_format: { type: 'json_object' },
+      messages: [{ role: 'user', content: prompt }],
+    }),
+  });
+
+  const data = await res.json();
+  if (data.error) throw new Error('OpenAI 오류: ' + data.error.message);
+  return JSON.parse(data.choices[0].message.content);
+}
+
 async function selectNewsWithGPT(newsList) {
   const today = new Date().toISOString().slice(0, 10);
   // 상위 20건만 전달, content_preview 포함
@@ -228,6 +268,16 @@ async function main() {
   // 선정된 뉴스의 크롤링 본문 첨부
   const matched = withContent.find(item => item.link === selected.link);
   if (matched) selected.content = matched.content;
+
+  // 캐릭터 반응 생성 (준혁 분석 + 하나 질문)
+  console.log('  캐릭터 반응 생성 중...');
+  try {
+    selected.reactions = await generateReactions(selected.title, selected.content);
+    console.log('  반응 생성 완료');
+  } catch (e) {
+    console.warn('  반응 생성 실패:', e.message);
+    selected.reactions = { junhyuk: '', hana: '' };
+  }
 
   // today-news.json 저장
   const outPath = path.join(__dirname, 'today-news.json');
