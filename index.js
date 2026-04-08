@@ -93,7 +93,7 @@ app.post('/chat', async (req, res) => {
 
     // 4-1. validator가 질문을 추가했으면 state 업데이트 (다음 요청 대비 로깅용)
     const updatedState = updateState({ phase, questionAsked }, {
-      questionAsked: validatedReply.includes('?'),
+      questionAsked: !!validatedReply.question,
     });
     console.log('state:', updatedState);
 
