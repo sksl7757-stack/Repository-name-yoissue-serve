@@ -2,7 +2,7 @@ const express = require('express');
 const cors = require('cors');
 const fs = require('fs');
 
-const { getState } = require('./stateManager');
+const { getState, updateState } = require('./stateManager');
 const { filterTopic } = require('./topicFilter');
 const { generateReply, buildSystemPrompt } = require('./generator');
 const { validate } = require('./validator');
@@ -66,8 +66,8 @@ app.post('/chat-opening', async (req, res) => {
 app.post('/chat', async (req, res) => {
   const { messages, character, memory } = req.body;
   try {
-    // 1. state 읽기
-    const { phase, questionAsked } = getState(messages);
+    // 1. state 읽기 (코드에서만 결정 — LLM 관여 없음)
+    const { phase } = getState(messages);
 
     // 2. topicFilter 실행
     const userInput = messages?.[messages.length - 1]?.content || '';
@@ -78,12 +78,18 @@ app.post('/chat', async (req, res) => {
     } catch {}
     const topicStatus = filterTopic(userInput, newsTitle);
 
-    // 3. generator 실행
+    // 3. generator 실행 (말투/스타일만 담당)
     const rawReply = await generateReply({ character, messages, memory });
     console.log('generator reply:', rawReply);
 
-    // 4. validator 실행
-    const validatedReply = validate({ reply: rawReply, phase, questionAsked, topicStatus, character });
+    // 4. validator 실행 (질문 추가/제거, 주제 이탈 — 코드에서만 결정)
+    const validatedReply = validate({ reply: rawReply, phase, topicStatus, character });
+
+    // 4-1. validator가 질문을 추가했으면 state 업데이트 (다음 요청 대비 로깅용)
+    const updatedState = updateState({ phase, questionAsked }, {
+      questionAsked: validatedReply.includes('?'),
+    });
+    console.log('state:', updatedState);
 
     // 5. responseBuilder로 최종 응답 생성
     res.json(buildResponse({ reply: validatedReply }));
@@ -154,7 +160,7 @@ app.post('/register-token', (req, res) => {
 });
 
 app.post('/send-notifications', async (req, res) => {
-  const { title, tag } = req.body;
+  const { tag } = req.body;
   const tokens = readTokens();
   if (tokens.length === 0) return res.json({ sent: 0 });
 
@@ -186,7 +192,7 @@ app.post('/send-notifications', async (req, res) => {
   }
 });
 
-app.get('/today-news', (req, res) => {
+app.get('/today-news', (_req, res) => {
   try {
     delete require.cache[require.resolve('./today-news.json')];
     const news = require('./today-news.json');
@@ -196,7 +202,7 @@ app.get('/today-news', (req, res) => {
   }
 });
 
-app.get('/test', (req, res) => {
+app.get('/test', (_req, res) => {
   const key = process.env.OPENAI_API_KEY;
   res.json({ hasKey: !!key, keyStart: key ? key.substring(0, 10) : '없음' });
 });
