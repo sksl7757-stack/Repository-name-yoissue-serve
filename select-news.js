@@ -10,16 +10,19 @@ if (fs.existsSync(envPath)) {
     const eq = trimmed.indexOf('=');
     if (eq === -1) return;
     const key = trimmed.slice(0, eq).trim();
-    const val = trimmed.slice(eq + 1).trim().replace(/^['"]|['"]$/g, '');
+    // 따옴표 제거 후 인라인 주석(# ...) 제거
+    const raw = trimmed.slice(eq + 1).trim().replace(/^['"]|['"]$/g, '');
+    const val = raw.replace(/\s+#.*$/, '').trim();
     if (key) process.env[key] = val;
   });
 } else {
   console.log('.env 파일 없음 — process.env(GitHub Secrets) 사용');
 }
 
-const NAVER_ID = process.env.NAVER_CLIENT_ID;
-const NAVER_SECRET = process.env.NAVER_CLIENT_SECRET;
-const OPENAI_KEY = process.env.OPENAI_API_KEY?.replace(/['"]/g, '');
+// 헤더 값에 비ASCII 문자가 포함되면 fetch ByteString 오류 발생 → 제거
+const NAVER_ID = (process.env.NAVER_CLIENT_ID || '').replace(/[^\x20-\x7E]/g, '');
+const NAVER_SECRET = (process.env.NAVER_CLIENT_SECRET || '').replace(/[^\x20-\x7E]/g, '');
+const OPENAI_KEY = (process.env.OPENAI_API_KEY || '').replace(/['"]/g, '').replace(/[^\x20-\x7E]/g, '');
 
 const SEARCH_QUERIES = ['속보', '주요뉴스', '경제이슈', '사회이슈', '화제'];
 
