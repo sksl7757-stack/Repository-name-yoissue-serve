@@ -51,16 +51,18 @@ function buildSystemPrompt(character, memory) {
     ? `\n\n【사용자 관찰 맥락 (직접 언급 금지, 자연스러운 추측으로만 활용)】\n${memory}`
     : '';
 
-  const commonPrinciples = `\n\n【공통 원칙】 전문용어 금지. 사람 말처럼 바꿔서 전달.`;
+  const commonPrinciples = `\n\n【공통 원칙】 전문용어 금지. 사람 말처럼 바꿔서 전달.\n【주의】 사실처럼 단정하지 말고, 설명 또는 해석 형태로 말할 것.`;
 
   const hardRule = `\n\n【출력 강제 규칙 — 반드시 지킬 것】\n\n* 첫 문장은 반드시 "반응"이어야 한다 (설명 금지)\n\n* 반응 없이 설명 시작하면 틀린 답변이다\n\n* 답변 구조는 항상:\n  1. 반응 (감정 or 판단)\n  2. 이어서 새로운 정보/관점\n\n* 1번 없이 2번만 하면 안 된다\n\n* 설명만 하는 답변은 무조건 실패`;
 
-  return basePrompt + newsDetailBlock + memoryBlock + commonPrinciples + hardRule;
+  const perspectiveRule = `\n\n【관점 단계 규칙】\n현재 단계에 따라 반드시 다른 관점으로 말해야 한다.\n\n0: 기본 설명 (현재 뉴스 상황)\n1: 영향 (사람들/사회에 어떤 영향인지)\n2: 위험성 (문제, 리스크, 앞으로 생길 수 있는 일)\n3: 개인 입장 (유저 입장에서 어떻게 느껴질지)\n\n같은 내용 반복 금지\n이전 단계와 다른 내용만 말할 것`;
+
+  return basePrompt + newsDetailBlock + memoryBlock + commonPrinciples + hardRule + perspectiveRule;
 }
 
-async function generateReply({ character, messages, memory }) {
+async function generateReply({ character, messages, memory, perspectiveStep = 0 }) {
   const OPENAI_KEY = process.env.OPENAI_API_KEY?.replace(/['"]/g, '');
-  const systemPrompt = buildSystemPrompt(character, memory);
+  const systemPrompt = buildSystemPrompt(character, memory) + `\n\n현재 관점 단계: ${perspectiveStep}`;
 
   const response = await fetch('https://api.openai.com/v1/chat/completions', {
     method: 'POST',

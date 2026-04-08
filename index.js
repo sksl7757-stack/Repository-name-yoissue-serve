@@ -67,10 +67,10 @@ app.post('/chat-opening', async (req, res) => {
 
 // /chat — harness orchestration
 app.post('/chat', async (req, res) => {
-  const { messages, character, memory } = req.body;
+  const { messages, character, memory, perspectiveStep = 0 } = req.body;
   try {
     // 1. state 읽기 (코드에서만 결정 — LLM 관여 없음)
-    const { phase, questionAsked } = getState(messages);
+    const { phase, questionAsked } = getState(messages, perspectiveStep);
 
     // 2. topicFilter 실행
     const userInput = messages?.[messages.length - 1]?.content || '';
@@ -85,7 +85,7 @@ app.post('/chat', async (req, res) => {
     }
 
     // 3. generator 실행 (말투/스타일만 담당)
-    const rawReply = await generateReply({ character, messages, memory });
+    const rawReply = await generateReply({ character, messages, memory, perspectiveStep });
     console.log('generator reply:', rawReply);
 
     // 4. validator 실행 (질문 추가/제거, 주제 이탈 — 코드에서만 결정)

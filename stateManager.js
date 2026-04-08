@@ -3,32 +3,33 @@
 const PHASE = { INIT: 'INIT', CHAT: 'CHAT' };
 
 /**
- * messages 배열에서 questionAsked를 파생하고 phase를 결정.
+ * messages 배열에서 questionAsked / perspectiveStep을 파생하고 phase를 결정.
  *
- * questionAsked = false → INIT (아직 질문 없음 → 첫 대화)
- * questionAsked = true  → CHAT (질문이 한 번이라도 나왔음 → 이후 대화)
+ * questionAsked = false → INIT
+ * questionAsked = true  → CHAT
+ * perspectiveStep: 클라이언트가 body로 넘겨준 값 사용 (기본 0)
  *
  * @param {Array} messages - [{role, content}, ...]
- * @returns {{ phase: 'INIT'|'CHAT', questionAsked: boolean }}
+ * @param {number} perspectiveStep
+ * @returns {{ phase: 'INIT'|'CHAT', questionAsked: boolean, perspectiveStep: number }}
  */
-function getState(messages = []) {
+function getState(messages = [], perspectiveStep = 0) {
   const assistantMessages = messages.filter(m => m.role === 'assistant');
   const questionAsked = assistantMessages.some(m => m.content && m.content.includes('?'));
   const phase = questionAsked ? PHASE.CHAT : PHASE.INIT;
-  return { phase, questionAsked };
+  return { phase, questionAsked, perspectiveStep };
 }
 
 /**
- * validator가 질문을 추가한 경우 state를 업데이트.
- * 반환된 state는 같은 요청 내에서만 사용 (다음 요청은 messages 기반으로 재파생).
+ * validator 이후 state 업데이트.
  *
- * @param {{ phase: string, questionAsked: boolean }} currentState
+ * @param {{ phase: string, questionAsked: boolean, perspectiveStep: number }} _currentState
  * @param {{ questionAsked: boolean }} update
- * @returns {{ phase: string, questionAsked: boolean }}
+ * @returns {{ phase: string, questionAsked: boolean, perspectiveStep: number }}
  */
 function updateState(_currentState, { questionAsked }) {
   const phase = questionAsked ? PHASE.CHAT : PHASE.INIT;
-  return { phase, questionAsked };
+  return { phase, questionAsked, perspectiveStep: _currentState.perspectiveStep };
 }
 
 module.exports = { getState, updateState, PHASE };
