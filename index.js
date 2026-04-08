@@ -1,3 +1,6 @@
+require('dotenv').config({ path: __dirname + '/.env' });
+console.log('ENV PATH:', __dirname);
+console.log('API KEY FULL:', process.env.OPENAI_API_KEY);
 const express = require('express');
 const cors = require('cors');
 const fs = require('fs');
@@ -67,7 +70,7 @@ app.post('/chat', async (req, res) => {
   const { messages, character, memory } = req.body;
   try {
     // 1. state 읽기 (코드에서만 결정 — LLM 관여 없음)
-    const { phase } = getState(messages);
+    const { phase, questionAsked } = getState(messages);
 
     // 2. topicFilter 실행
     const userInput = messages?.[messages.length - 1]?.content || '';
@@ -192,14 +195,21 @@ app.post('/send-notifications', async (req, res) => {
   }
 });
 
-app.get('/today-news', (_req, res) => {
+app.post('/today-news', (req, res) => {
+  console.log('body:', req.body);
   try {
     delete require.cache[require.resolve('./today-news.json')];
     const news = require('./today-news.json');
     res.json(news);
   } catch (e) {
+    console.log('today-news 에러:', e.message);
     res.status(500).json({ error: 'today-news.json을 읽을 수 없습니다.' });
   }
+});
+
+app.post('/today-news-test', (req, res) => {
+  console.log('test route body:', req.body);
+  res.json({ ok: true, message: 'test success' });
 });
 
 app.get('/test', (_req, res) => {
@@ -208,7 +218,7 @@ app.get('/test', (_req, res) => {
 });
 
 if (require.main === module) {
-  app.listen(3000, () => console.log('서버 실행중 port 3000'));
+  app.listen(4000, () => console.log('서버 실행중 port 4000'));
 }
 
 module.exports = app;
