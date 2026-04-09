@@ -35,7 +35,7 @@ const CHARACTER_PROMPTS = {
 【길이】 2~3문장. 짧고 간결하게.`,
 };
 
-function buildSystemPrompt(character, memory, { isPerspectiveRequest = false, perspectiveStep = 0 } = {}) {
+function buildSystemPrompt(character, memory, { isPerspectiveRequest = false, perspectiveStep = 0, phase = 'INIT' } = {}) {
   const basePrompt = CHARACTER_PROMPTS[character] || CHARACTER_PROMPTS['하나'];
 
   let newsDetailBlock = '';
@@ -59,18 +59,22 @@ function buildSystemPrompt(character, memory, { isPerspectiveRequest = false, pe
 
   const stepInfo = `\n\n현재 관점 단계: ${perspectiveStep}`;
 
+  const stateRule = phase === 'CHAT'
+    ? `\n\n【현재 상태: CHAT】\n\n* 질문 생성 절대 금지\n* "어떻게 생각해?", "어떻게 봐?", "~?" 형태 문장 금지\n* 대화를 이어가되 질문 없이 끝낼 것`
+    : `\n\n【현재 상태: INIT】\n\n* 첫 응답이므로 설명 중심으로 말할 것\n* 질문은 별도로 추가됨 — 응답에 질문 포함하지 말 것`;
+
   const actionRule = isPerspectiveRequest
     ? `\n\n【행동 모드】\n이번 응답은 "다른 관점 요청"이다.\n\n* 유저 질문에 답하는 것이 아니라\n* 현재 뉴스에 대해 새로운 관점으로 이어서 말해야 한다\n* 질문 해석하지 말 것\n* 바로 이어서 설명 시작`
     : '';
 
   const characterLockRule = `\n\n【캐릭터 유지 — 매우 중요】\n아무리 관점 설명이라도 캐릭터 스타일이 최우선이다.\n\n* 하나는 반드시 감정 기반으로 말해야 한다\n* 준혁은 반드시 짧고 구조적으로 말해야 한다\n\n관점 설명 때문에 캐릭터 말투가 깨지면 실패다\n\n우선순위:\n1. 캐릭터 스타일\n2. 반응 구조 (반응 → 관점)\n3. 관점 내용`;
 
-  return basePrompt + newsDetailBlock + memoryBlock + commonPrinciples + hardRule + stepInfo + perspectiveRule + actionRule + characterLockRule;
+  return basePrompt + newsDetailBlock + memoryBlock + commonPrinciples + hardRule + stateRule + stepInfo + perspectiveRule + actionRule + characterLockRule;
 }
 
-async function generateReply({ character, messages, memory, perspectiveStep = 0, isPerspectiveRequest = false }) {
+async function generateReply({ character, messages, memory, perspectiveStep = 0, isPerspectiveRequest = false, phase = 'INIT' }) {
   const OPENAI_KEY = process.env.OPENAI_API_KEY?.replace(/['"]/g, '');
-  const systemPrompt = buildSystemPrompt(character, memory, { isPerspectiveRequest, perspectiveStep });
+  const systemPrompt = buildSystemPrompt(character, memory, { isPerspectiveRequest, perspectiveStep, phase });
 
   const response = await fetch('https://api.openai.com/v1/chat/completions', {
     method: 'POST',

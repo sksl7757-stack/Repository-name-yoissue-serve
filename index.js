@@ -103,7 +103,7 @@ app.post('/chat', async (req, res) => {
     }
 
     // 3. generator 실행 (말투/스타일만 담당)
-    const rawReply = await generateReply({ character, messages, memory, perspectiveStep });
+    const rawReply = await generateReply({ character, messages, memory, perspectiveStep, phase });
     console.log('generator reply:', rawReply);
 
     // 4. validator 실행 (질문 추가/제거, 주제 이탈 — 코드에서만 결정)
@@ -116,7 +116,7 @@ app.post('/chat', async (req, res) => {
     console.log('state:', updatedState);
 
     // 5. responseBuilder로 최종 응답 생성
-    res.json(buildResponse({ message: validatedReply.message, question: validatedReply.question }));
+    res.json(buildResponse({ message: validatedReply.message, question: validatedReply.question, phase }));
   } catch (e) {
     console.log('chat 에러:', e.message);
     res.status(500).json({ error: e.message });
