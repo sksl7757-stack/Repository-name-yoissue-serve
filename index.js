@@ -10,6 +10,7 @@ const { filterTopic } = require('./topicFilter');
 const { generateReply, buildSystemPrompt } = require('./generator');
 const { validate } = require('./validator');
 const { buildResponse } = require('./responseBuilder');
+const { saveNews, getSavedNews } = require('./saveNews');
 
 const app = express();
 app.use(cors());
@@ -225,6 +226,20 @@ app.post('/today-news', (req, res) => {
     console.log('today-news 에러:', e.message);
     res.status(500).json({ error: 'today-news.json을 읽을 수 없습니다.' });
   }
+});
+
+app.post('/save-news', (req, res) => {
+  const { userId, newsId } = req.body;
+  if (!userId || !newsId) return res.status(400).json({ error: 'userId와 newsId 필요' });
+  const result = saveNews(userId, newsId);
+  res.json(result);
+});
+
+app.get('/saved-news', (req, res) => {
+  const { userId } = req.query;
+  if (!userId) return res.status(400).json({ error: 'userId 필요' });
+  const list = getSavedNews(userId);
+  res.json({ savedNews: list });
 });
 
 app.post('/today-news-test', (req, res) => {
