@@ -98,16 +98,16 @@ async function generateReply({ character, messages, memory, perspectiveStep = 0,
   if (data.error) throw new Error(data.error.message);
 
   let text = data?.choices?.[0]?.message?.content || '응답없음';
+  const original = text;
 
-  // 질문 문장 강제 제거: 문장 단위로 분리 후 '?'로 끝나는 문장 제거
+  // 질문 문장 강제 제거: '?'로 끝나는 문장(줄바꿈 포함) 통째로 제거
   text = text
-    .split(/(?<=[.!?])\s+|(?<=\?)\s*/)
-    .filter(s => !s.trim().endsWith('?'))
-    .join(' ')
+    .replace(/[^.!?\n]*\?[^\n]*/g, '')  // ? 포함 문장 제거
+    .replace(/\n{2,}/g, '\n')            // 연속 빈 줄 정리
     .trim();
 
-  // 분리 후 빈 결과 방지
-  if (!text) text = data?.choices?.[0]?.message?.content?.trim() || '응답없음';
+  // 제거 후 빈 결과 방지
+  if (!text) text = original.trim();
 
   return text;
 }
