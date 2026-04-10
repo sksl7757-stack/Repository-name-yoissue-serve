@@ -4,6 +4,7 @@ console.log('API KEY FULL:', process.env.OPENAI_API_KEY);
 const express = require('express');
 const cors = require('cors');
 const fs = require('fs');
+const path = require('path');
 
 const { getState, updateState } = require('./stateManager');
 const { filterTopic } = require('./topicFilter');
@@ -11,6 +12,7 @@ const { generateReply, buildSystemPrompt } = require('./generator');
 const { validate } = require('./validator');
 const { buildResponse } = require('./responseBuilder');
 const { saveNews, getSavedNews } = require('./saveNews');
+const { addRecord, getRecords } = require('./records');
 
 const app = express();
 app.use(cors());
@@ -41,7 +43,7 @@ app.post('/chat-opening', async (req, res) => {
   const { character, memory } = req.body;
   try {
     const OPENAI_KEY = process.env.OPENAI_API_KEY?.replace(/['"]/g, '');
-    const baseSystem = buildSystemPrompt(character, memory);
+    const baseSystem = buildSystemPrompt(character, memory, { phase: 'INIT' });
     const systemWithFormat = baseSystem + `\n\n【출력 형식】 아래 JSON으로만 반환. 다른 텍스트 없이:\n{"opening": "뉴스 보기 전 궁금증 유발 한 줄", "comment": "뉴스 카드 본 후 생활 영향/공감 한 줄. 반드시 유저가 자연스럽게 대답하고 싶어지는 열린 질문으로 끝낼 것."}`;
 
     const response = await fetch('https://api.openai.com/v1/chat/completions', {
@@ -94,8 +96,7 @@ app.post('/chat', async (req, res) => {
     const userInput = messages?.[messages.length - 1]?.content || '';
     let newsTitle = '';
     try {
-      delete require.cache[require.resolve('./today-news.json')];
-      newsTitle = require('./today-news.json').title || '';
+      newsTitle = JSON.parse(fs.readFileSync(path.join(__dirname, 'today-news.json'), 'utf-8')).title || '';
     } catch {}
     let topicStatus = 'ON_TOPIC';
     if (phase === 'CHAT') {
@@ -219,8 +220,7 @@ app.post('/send-notifications', async (req, res) => {
 app.post('/today-news', (req, res) => {
   console.log('body:', req.body);
   try {
-    delete require.cache[require.resolve('./today-news.json')];
-    const news = require('./today-news.json');
+    const news = JSON.parse(fs.readFileSync(path.join(__dirname, 'today-news.json'), 'utf-8'));
     res.json(news);
   } catch (e) {
     console.log('today-news 에러:', e.message);
@@ -242,15 +242,25 @@ app.get('/saved-news', (req, res) => {
   res.json({ savedNews: list });
 });
 
+app.post('/records', (req, res) => {
+  const { userId, newsId, title, character, userChoice, createdAt } = req.body;
+  if (!userId || !newsId) return res.status(400).json({ error: 'userId와 newsId 필요' });
+  const result = addRecord(userId, { newsId, title, character, userChoice, createdAt });
+  res.json(result);
+});
+
+app.get('/records', (req, res) => {
+  const { userId } = req.query;
+  if (!userId) return res.status(400).json({ error: 'userId 필요' });
+  const list = getRecords(userId);
+  res.json({ records: list });
+});
+
 app.post('/today-news-test', (req, res) => {
   console.log('test route body:', req.body);
   res.json({ ok: true, message: 'test success' });
 });
 
-app.get('/test', (_req, res) => {
-  const key = process.env.OPENAI_API_KEY;
-  res.json({ hasKey: !!key, keyStart: key ? key.substring(0, 10) : '없음' });
-});
 
 if (require.main === module) {
   app.listen(4000, () => console.log('서버 실행중 port 4000'));
