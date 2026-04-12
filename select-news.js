@@ -1,5 +1,9 @@
 const path = require('path');
 const fs = require('fs');
+const { analyzeTrend }  = require('./analyzeTrend');
+const { scoreImpact }   = require('./scoreImpact');
+const { scoreRepresent } = require('./scoreRepresent');
+const { combineScore, resolveWeights } = require('./combineScore');
 
 // .env를 fs로 직접 읽어 파싱 (dotenvx 암호화 우회). 파일 없으면 process.env fallback.
 const envPath = path.join(__dirname, '.env');
@@ -140,71 +144,136 @@ async function generateReactions(title, content) {
   return JSON.parse(data.choices[0].message.content);
 }
 
-async function selectNewsWithGPT(newsList) {
-  const today = new Date().toISOString().slice(0, 10);
-  // 상위 20건만 전달, content_preview 포함
-  const limited = newsList.slice(0, 20).map(item => ({
-    title: item.title,
-    content_preview: item.content.slice(0, 300),
-    link: item.link,
-  }));
+// ─── 메타데이터 추론 헬퍼 ───────────────────────────────────────────────────
 
-  const prompt = `오늘 날짜: ${today}
+const CATEGORY_MAP = [
+  { name: 'IT',     keywords: ['AI', '인공지능', '반도체', '빅테크', '구글', '삼성전자', '메타', '오픈AI', '챗GPT', '소프트웨어', '스타트업'] },
+  { name: '금융',   keywords: ['금리', '주가', '증시', '코스피', '코스닥', '달러', '환율', '채권', '은행', '금융'] },
+  { name: '경제',   keywords: ['경제', '물가', '관세', '무역', '수출', '수입', 'GDP', '인플레', '성장률', '소비자'] },
+  { name: '부동산', keywords: ['부동산', '아파트', '주택', '전세', '집값', '분양', '임대'] },
+  { name: '정치',   keywords: ['국회', '대통령', '여당', '야당', '선거', '정당', '탄핵', '의원', '정치'] },
+  { name: '국제',   keywords: ['미국', '중국', '러시아', '유럽', '이란', '트럼프', '바이든', '시진핑', '푸틴', '북한'] },
+  { name: '건강',   keywords: ['의료', '건강', '병원', '백신', '바이러스', '코로나', '암', '질병'] },
+  { name: '환경',   keywords: ['기후', '탄소', '환경', '에너지', '원전', '태양광'] },
+  { name: '문화',   keywords: ['영화', '음악', '드라마', '문화', '예술', '공연'] },
+  { name: '사회',   keywords: ['사건', '사고', '범죄', '복지', '교육', '학교', '노동'] },
+];
 
-다음 뉴스 목록을 보고 "오늘 한국인이라면 꼭 알아야 할 이슈" 1개를 선정해줘.
-경제/정치/사회/IT를 골고루 고려하고, 국가적 파장이 큰 사건은 카테고리 상관없이 높은 점수를 줘.
+const CATEGORY_EMOJI = {
+  'IT': '💻', '금융': '💰', '경제': '📈', '부동산': '🏠',
+  '정치': '🏛️', '국제': '🌍', '건강': '🏥', '환경': '🌱',
+  '문화': '🎭', '사회': '👥',
+};
 
-【가산 기준】
-- 화제성 +3: 빠르게 퍼지거나 많이 언급되는 이슈
-- 임팩트 +2: 일반인 일상에 직접 영향 있는 이슈
-- 이해쉬움 +1/-1: 쉽게 이해 가능하면 +1, 매우 전문적/복잡하면 -1
-- 국내이슈 +1: 한국 관련 뉴스 우선
-- 최신성 +1: 오늘/어제 발행 기사
+const DOMAIN_SOURCE = {
+  'yna.co.kr': '연합뉴스', 'yonhapnewstv.co.kr': '연합뉴스TV',
+  'kbs.co.kr': 'KBS', 'mbc.co.kr': 'MBC', 'sbs.co.kr': 'SBS',
+  'jtbc.co.kr': 'JTBC', 'tvchosun.com': 'TV조선', 'mbn.co.kr': 'MBN',
+  'chosun.com': '조선일보', 'joins.com': '중앙일보', 'donga.com': '동아일보',
+  'hani.co.kr': '한겨레', 'khan.co.kr': '경향신문', 'ohmynews.com': '오마이뉴스',
+  'newsis.com': '뉴시스', 'news1.kr': '뉴스1', 'ytn.co.kr': 'YTN',
+  'edaily.co.kr': '이데일리', 'mt.co.kr': '머니투데이',
+  'hankyung.com': '한국경제', 'mk.co.kr': '매일경제', 'sedaily.com': '서울경제',
+  'dt.co.kr': '디지털타임스', 'etnews.com': '전자신문', 'zdnet.co.kr': 'ZDNet Korea',
+  'nocutnews.co.kr': '노컷뉴스', 'pressian.com': '프레시안',
+};
 
-【감점 기준】 (단, 국가적 파장이 크면 예외 적용)
-- 교통사고·단순 사건사고 -2 (예외: 대형 재난급 사망자 다수 등)
-- 연예인 가십·스캔들 -2 (예외: 국가적 이슈급)
-- 단순 해외 뉴스 -1 (예외: 한국에 직접 영향 있는 경우)
-- 날씨·자연재해 -2 (예외: 대규모 재난)
-- 스포츠 경기 결과 -2 (예외: 올림픽·월드컵급)
-
-title은 원문을 참고해 "..."없이 완전한 문장으로 재작성해줘.
-
-아래 JSON 형식으로 응답해:
-{
-  "title": "뉴스 제목 (완전한 문장, ... 없이)",
-  "tag": "오늘의 픽 · [경제/정치/사회/IT/국제/금융/문화/환경/건강/부동산 중 하나]",
-  "emoji": "이모지1개",
-  "summary": ["첫째 요약 문장 (~20자)", "둘째 요약 문장 (~20자)", "셋째 요약 문장 (~20자)"],
-  "link": "원문URL",
-  "source": "언론사 이름 (예: 연합뉴스, KBS, 노컷뉴스 등. 링크 도메인 기반으로 판단)",
-  "score": 점수숫자,
-  "date": "${today}"
+function inferTag(item) {
+  const text = item.title + ' ' + (item.content || '');
+  for (const { name, keywords } of CATEGORY_MAP) {
+    if (keywords.some(k => text.includes(k))) return `오늘의 픽 · ${name}`;
+  }
+  return '오늘의 픽 · 사회';
 }
 
-뉴스 목록:
-${JSON.stringify(limited, null, 2)}`;
+function inferEmoji(tag) {
+  const category = tag.replace('오늘의 픽 · ', '');
+  return CATEGORY_EMOJI[category] || '📰';
+}
 
-  console.log('사용키:', OPENAI_KEY?.slice(-6));
-  const res = await fetch('https://api.openai.com/v1/chat/completions', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'Authorization': `Bearer ${OPENAI_KEY}`,
-    },
-    body: JSON.stringify({
-      model: 'gpt-4o-mini',
-      max_tokens: 800,
-      temperature: 0.3,
-      response_format: { type: 'json_object' },
-      messages: [{ role: 'user', content: prompt }],
-    }),
+function makeSummary(content) {
+  if (!content) return ['내용을 불러오지 못했습니다.', '', ''];
+  const sentences = content
+    .split(/(?<=[다했요음죠죠임]\.)\s+|[。!?]\s+/)
+    .map(s => s.trim().replace(/\s+/g, ' '))
+    .filter(s => s.length >= 10);
+  const result = sentences.slice(0, 3).map(s => s.slice(0, 25));
+  while (result.length < 3) result.push('');
+  return result;
+}
+
+function inferSource(link) {
+  try {
+    const hostname = new URL(link).hostname.replace(/^www\./, '');
+    for (const [domain, name] of Object.entries(DOMAIN_SOURCE)) {
+      if (hostname.includes(domain)) return name;
+    }
+    return hostname;
+  } catch {
+    return '알 수 없음';
+  }
+}
+
+// ─── 뉴스 선정 (코드 기반) ───────────────────────────────────────────────────
+
+function pickBestNews(newsList, analysis) {
+  const today = new Date().toISOString().slice(0, 10);
+
+  const { wImpact, wRepresent, label } = resolveWeights(analysis);
+  console.log(`    가중치: impact×${wImpact} + represent×${wRepresent} (${label})`);
+
+  const scored = newsList.map(item => {
+    const impact    = scoreImpact(item);
+    const represent = scoreRepresent(item, analysis);
+    const finalScore = combineScore(impact, represent, analysis);
+    return { item, impact, represent, finalScore };
   });
 
-  const data = await res.json();
-  if (data.error) throw new Error('OpenAI 오류: ' + data.error.message);
-  const content = data?.choices?.[0]?.message?.content || '';
-  return JSON.parse(content);
+  const QUALITY_THRESHOLD   = 2.5;
+  const REPRESENT_MIN_SCORE = 2;
+
+  scored.sort((a, b) => b.finalScore - a.finalScore);
+
+  // 상위 3건 로그 (필터링 전 전체 기준)
+  scored.slice(0, 3).forEach(({ item, impact, represent, finalScore }, i) => {
+    console.log(`    ${i + 1}위 [impact:${impact}×${wImpact} + represent:${represent}×${wRepresent} = ${finalScore.toFixed(2)}점] ${item.title.slice(0, 40)}`);
+  });
+
+  // represent 기준 미달 뉴스 제거 (트렌드 무관 뉴스 차단)
+  const candidates = scored.filter(({ represent }) => represent > REPRESENT_MIN_SCORE);
+  if (candidates.length < scored.length) {
+    console.log(`    represent ≤ ${REPRESENT_MIN_SCORE} 제외: ${scored.length - candidates.length}건 탈락, 후보 ${candidates.length}건 남음`);
+  }
+  // 모두 탈락하면 전체 목록으로 fallback
+  const pool = candidates.length > 0 ? candidates : scored;
+
+  // 선택 품질 검사 (pool 기준)
+  const topScore = pool[0].finalScore;
+  let best;
+
+  if (topScore <= QUALITY_THRESHOLD) {
+    console.warn(`  ⚠ 선택 품질 낮음 (최고점 ${topScore.toFixed(2)} ≤ ${QUALITY_THRESHOLD}): 대표성이 부족한 날로 판단`);
+
+    // fallback: pool 내에서 represent 점수가 가장 높은 뉴스 선택
+    const fallback = [...pool].sort((a, b) => b.represent - a.represent)[0];
+    console.warn(`  ↩ fallback 선택 [represent:${fallback.represent}점] ${fallback.item.title.slice(0, 40)}`);
+    best = fallback.item;
+  } else {
+    best = pool[0].item;
+  }
+  const tag  = inferTag(best);
+
+  return {
+    title:  best.title,
+    tag,
+    emoji:  inferEmoji(tag),
+    summary: makeSummary(best.content),
+    link:   best.link,
+    source: inferSource(best.link),
+    score:  scored[0].finalScore,
+    date:   today,
+    content: best.content,
+  };
 }
 
 async function main() {
@@ -260,14 +329,16 @@ async function main() {
   console.log(`  크롤링 성공: ${withContent.length}건 / ${unique.length}건`);
   if (withContent.length === 0) throw new Error('크롤링 성공한 뉴스가 없습니다.');
 
-  // GPT로 핫이슈 선정
-  console.log('  GPT-4o-mini 채점 중...');
-  const selected = await selectNewsWithGPT(withContent);
-  console.log(`  선정: [${selected.score}점] ${selected.title}`);
+  // GPT로 트렌드 분석 (1회 호출)
+  console.log('  GPT-4o-mini 트렌드 분석 중...');
+  console.log('  사용키:', OPENAI_KEY?.slice(-6));
+  const analysis = await analyzeTrend(withContent, OPENAI_KEY);
+  console.log(`  트렌드: [${analysis.mainKeyword}] ${analysis.mainMood} — ${analysis.mainTopic}`);
 
-  // 선정된 뉴스의 크롤링 본문 첨부
-  const matched = withContent.find(item => item.link === selected.link);
-  if (matched) selected.content = matched.content;
+  // 코드 기반 점수 계산 및 뉴스 선정
+  console.log('  점수 계산 및 선정 중...');
+  const selected = pickBestNews(withContent, analysis);
+  console.log(`  선정: [${selected.score}점] ${selected.title}`);
 
   // 캐릭터 반응 생성 (준혁 분석 + 하나 질문)
   console.log('  캐릭터 반응 생성 중...');
@@ -281,7 +352,7 @@ async function main() {
 
   // today-news.json 저장
   const outPath = path.join(__dirname, 'today-news.json');
-  fs.writeFileSync(outPath, JSON.stringify(selected, null, 2), 'utf-8');
+  fs.writeFileSync(outPath, JSON.stringify({ ...selected, analysis }, null, 2), 'utf-8');
   console.log(`  저장 완료: ${outPath}`);
 
   // 저장된 토큰들에 푸시 알림 발송
