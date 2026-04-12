@@ -53,9 +53,14 @@ function buildSystemPrompt(character, memory, { isPerspectiveRequest = false, pe
   return basePrompt + newsDetailBlock + memoryBlock + commonPrinciples + hardRule + noQuestionRule + stateRule + stepInfo + perspectiveRule + actionRule + characterLockRule;
 }
 
+// JSON 출력 형식 지시 — generateReply 전용 (chat-opening 등 다른 엔드포인트에 영향 없음)
+const JSON_FORMAT_RULE = `\n\n【출력 형식 — 절대 규칙】\n반드시 아래 JSON 형식으로만 반환. 다른 텍스트 없이:\n{\n  "text": "캐릭터 대사",\n  "emotion": "positive" | "negative" | "neutral"\n}\n\nemotion 기준:\n- positive: 뉴스를 긍정적/희망적으로 해석\n- negative: 뉴스를 부정적/걱정스럽게 해석\n- neutral: 중립적/복합적으로 해석`;
+
+const VALID_EMOTIONS = new Set(['positive', 'negative', 'neutral']);
+
 async function generateReply({ character, messages, memory, perspectiveStep = 0, isPerspectiveRequest = false, phase = 'INIT' }) {
   const OPENAI_KEY = process.env.OPENAI_API_KEY?.replace(/['"]/g, '');
-  const systemPrompt = buildSystemPrompt(character, memory, { isPerspectiveRequest, perspectiveStep, phase });
+  const systemPrompt = buildSystemPrompt(character, memory, { isPerspectiveRequest, perspectiveStep, phase }) + JSON_FORMAT_RULE;
 
   const response = await fetch('https://api.openai.com/v1/chat/completions', {
     method: 'POST',
@@ -65,7 +70,8 @@ async function generateReply({ character, messages, memory, perspectiveStep = 0,
     },
     body: JSON.stringify({
       model: 'gpt-4o-mini',
-      max_tokens: 300,
+      max_tokens: 350,
+      response_format: { type: 'json_object' },
       messages: [
         { role: 'system', content: systemPrompt },
         ...messages,
@@ -76,19 +82,21 @@ async function generateReply({ character, messages, memory, perspectiveStep = 0,
   const data = await response.json();
   if (data.error) throw new Error(data.error.message);
 
-  let text = data?.choices?.[0]?.message?.content || '응답없음';
-  const original = text;
+  const raw = data?.choices?.[0]?.message?.content || '{}';
 
-  // 질문 문장 강제 제거: '?'로 끝나는 문장(줄바꿈 포함) 통째로 제거
-  text = text
-    .replace(/[^.!?\n]*\?[^\n]*/g, '')  // ? 포함 문장 제거
-    .replace(/\n{2,}/g, '\n')            // 연속 빈 줄 정리
-    .trim();
+  let text    = '응답없음';
+  let emotion = 'neutral';
 
-  // 제거 후 빈 결과 방지
-  if (!text) text = original.trim();
+  try {
+    const parsed = JSON.parse(raw);
+    text    = (parsed.text    || '').trim() || raw.trim();
+    emotion = VALID_EMOTIONS.has(parsed.emotion) ? parsed.emotion : 'neutral';
+  } catch {
+    // 파싱 실패 시 원문 그대로 사용, emotion 은 기본값 유지
+    text = raw.trim();
+  }
 
-  return text;
+  return { text, emotion };
 }
 
 module.exports = { generateReply, buildSystemPrompt };

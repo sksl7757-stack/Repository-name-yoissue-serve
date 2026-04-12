@@ -85,8 +85,8 @@ app.post('/chat', async (req, res) => {
         });
       }
       const rawReply = await generateReply({ character, messages, memory, perspectiveStep, isPerspectiveRequest: true });
-      const validatedReply = validate({ reply: rawReply, phase: 'CHAT', topicStatus: 'ON_TOPIC', character });
-      return res.json(buildResponse({ message: validatedReply.message, question: validatedReply.question }));
+      const validatedReply = validate({ reply: rawReply.text, phase: 'CHAT', topicStatus: 'ON_TOPIC', character });
+      return res.json(buildResponse({ message: validatedReply.message, question: validatedReply.question, emotion: rawReply.emotion }));
     }
 
     // 1. state 읽기 (코드에서만 결정 — LLM 관여 없음)
@@ -108,7 +108,7 @@ app.post('/chat', async (req, res) => {
     console.log('generator reply:', rawReply);
 
     // 4. validator 실행 (질문 추가/제거, 주제 이탈 — 코드에서만 결정)
-    const validatedReply = validate({ reply: rawReply, phase, topicStatus, character });
+    const validatedReply = validate({ reply: rawReply.text, phase, topicStatus, character });
 
     // 4-1. validator가 질문을 추가했으면 state 업데이트 (다음 요청 대비 로깅용)
     const updatedState = updateState({ phase, questionAsked }, {
@@ -117,7 +117,7 @@ app.post('/chat', async (req, res) => {
     console.log('state:', updatedState);
 
     // 5. responseBuilder로 최종 응답 생성
-    res.json(buildResponse({ message: validatedReply.message, question: validatedReply.question, phase }));
+    res.json(buildResponse({ message: validatedReply.message, question: validatedReply.question, phase, emotion: rawReply.emotion }));
   } catch (e) {
     console.log('chat 에러:', e.message);
     res.status(500).json({ error: e.message });

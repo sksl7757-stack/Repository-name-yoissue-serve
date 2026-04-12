@@ -9,13 +9,13 @@ function stripQuestionSentences(text) {
 }
 
 /**
- * @param {{ message: string, question: string|null, phase?: string }}
- * @returns {{ message: string, question: string|null }}
+ * @param {{ message: string, question: string|null, phase?: string, emotion?: string }}
+ * @returns {{ message: string, question: string|null, emotion: string }}
  */
-function buildResponse({ message, question, phase }) {
+function buildResponse({ message, question, phase, emotion = 'neutral' }) {
   const cleanMessage = stripQuestionSentences(message);
-  if (phase === 'CHAT') return { message: cleanMessage, question: null };
-  return { message: cleanMessage, question: question || null };
+  if (phase === 'CHAT') return { message: cleanMessage, question: null, emotion };
+  return { message: cleanMessage, question: question || null, emotion };
 }
 
 module.exports = { buildResponse };
