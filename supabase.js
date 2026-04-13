@@ -1,10 +1,24 @@
-// supabase.js — Supabase 클라이언트 싱글톤
+// supabase.js — Supabase 클라이언트 싱글톤 (지연 초기화)
 const { createClient } = require('@supabase/supabase-js');
 
-const supabase = createClient(
-  process.env.SUPABASE_URL,
-  process.env.SUPABASE_SERVICE_KEY,
-);
+let _client = null;
+
+function getClient() {
+  if (!_client) {
+    _client = createClient(
+      process.env.SUPABASE_URL,
+      process.env.SUPABASE_SERVICE_KEY,
+    );
+  }
+  return _client;
+}
+
+// supabase.xxx() 호출 시 자동으로 클라이언트를 반환하는 Proxy
+const supabase = new Proxy({}, {
+  get(_, prop) {
+    return getClient()[prop];
+  },
+});
 
 /**
  * 오늘 날짜(YYYY-MM-DD)의 뉴스 레코드를 반환.

@@ -3,7 +3,6 @@ console.log('ENV PATH:', __dirname);
 console.log('API KEY FULL:', process.env.OPENAI_API_KEY);
 const express = require('express');
 const cors = require('cors');
-const fs = require('fs');
 
 const { getState, updateState } = require('./stateManager');
 const { filterTopic } = require('./topicFilter');
@@ -18,12 +17,21 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-// Vercel 환경에서 /tmp는 인스턴스 내 ephemeral 저장소
-const TOKENS_PATH = '/tmp/tokens.json';
+// ── 푸시 토큰: Supabase push_tokens 테이블 ────────────────────────────────────
 
-function readTokens() {
-  try { return JSON.parse(fs.readFileSync(TOKENS_PATH, 'utf-8')); }
-  catch { return []; }
+async function readTokens() {
+  const { data, error } = await supabase
+    .from('push_tokens')
+    .select('token');
+  if (error) { console.error('push_tokens 조회 오류:', error.message); return []; }
+  return (data || []).map(r => r.token);
+}
+
+async function upsertToken(token) {
+  const { error } = await supabase
+    .from('push_tokens')
+    .upsert({ token }, { onConflict: 'token' });
+  if (error) console.error('push_tokens upsert 오류:', error.message);
 }
 
 const OPENING_MESSAGES = {
@@ -174,20 +182,17 @@ ${JSON.stringify(messages || [], null, 2)}`;
   }
 });
 
-app.post('/register-token', (req, res) => {
+app.post('/register-token', async (req, res) => {
   const { token } = req.body;
   if (!token) return res.status(400).json({ error: 'token required' });
-  const tokens = readTokens();
-  if (!tokens.includes(token)) {
-    tokens.push(token);
-    try { fs.writeFileSync(TOKENS_PATH, JSON.stringify(tokens), 'utf-8'); } catch {}
-  }
+  await upsertToken(token);
+  const tokens = await readTokens();
   res.json({ ok: true, total: tokens.length });
 });
 
 app.post('/send-notifications', async (req, res) => {
   const { tag } = req.body;
-  const tokens = readTokens();
+  const tokens = await readTokens();
   if (tokens.length === 0) return res.json({ sent: 0 });
 
   const rawTag = (tag || '').split('· ').pop()?.trim();

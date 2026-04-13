@@ -377,7 +377,7 @@ async function main() {
   fs.writeFileSync(outPath, JSON.stringify({ ...selected, analysis }, null, 2), 'utf-8');
   console.log(`  로컬 저장 완료: ${outPath}`);
 
-  // 집 PC ngrok 주소로 이미지 생성 트리거
+  // 집 PC yoissue-server로 이미지 생성 트리거 (SD_LOCAL_URL = ngrok port 4000)
   const SD_LOCAL_URL = process.env.SD_LOCAL_URL;
   if (SD_LOCAL_URL) {
     try {
