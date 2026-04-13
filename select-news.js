@@ -1,5 +1,6 @@
 const path = require('path');
 const fs = require('fs');
+const { supabase } = require('./supabase');
 const { analyzeTrend }  = require('./analyzeTrend');
 const { scoreImpact }   = require('./scoreImpact');
 const { scoreRepresent } = require('./scoreRepresent');
@@ -350,10 +351,50 @@ async function main() {
     selected.reactions = { junhyuk: '', hana: '' };
   }
 
-  // today-news.json 저장
+  // category 추론 (tag에서 추출)
+  const category = selected.tag.replace('오늘의 픽 · ', '').trim();
+
+  // Supabase daily_news 테이블에 upsert
+  console.log('  Supabase 저장 중...');
+  const record = {
+    date:      selected.date,
+    title:     selected.title,
+    content:   selected.content   || '',
+    summary:   Array.isArray(selected.summary) ? selected.summary : [],
+    tag:       selected.tag       || '',
+    category,
+    analysis:  analysis           || {},
+    reactions: selected.reactions || {},
+  };
+  const { error: dbError } = await supabase
+    .from('daily_news')
+    .upsert(record, { onConflict: 'date' });
+  if (dbError) throw new Error('Supabase 저장 오류: ' + dbError.message);
+  console.log('  Supabase 저장 완료');
+
+  // 로컬 fallback용 today-news.json도 함께 유지
   const outPath = path.join(__dirname, 'today-news.json');
   fs.writeFileSync(outPath, JSON.stringify({ ...selected, analysis }, null, 2), 'utf-8');
-  console.log(`  저장 완료: ${outPath}`);
+  console.log(`  로컬 저장 완료: ${outPath}`);
+
+  // 집 PC ngrok 주소로 이미지 생성 트리거
+  const SD_LOCAL_URL = process.env.SD_LOCAL_URL;
+  if (SD_LOCAL_URL) {
+    try {
+      console.log('  이미지 생성 트리거 중...');
+      const triggerRes = await fetch(`${SD_LOCAL_URL}/start-image-generation`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ category, tag: selected.tag, title: selected.title }),
+      });
+      const triggerData = await triggerRes.json();
+      console.log('  이미지 생성 트리거 완료:', triggerData);
+    } catch (e) {
+      console.warn('  이미지 생성 트리거 실패:', e.message);
+    }
+  } else {
+    console.warn('  SD_LOCAL_URL 미설정 — 이미지 생성 스킵');
+  }
 
   // 저장된 토큰들에 푸시 알림 발송
   const SERVER_URL = 'https://repository-name-yoissue-serve.vercel.app';

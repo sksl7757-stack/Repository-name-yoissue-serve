@@ -4,7 +4,6 @@ console.log('API KEY FULL:', process.env.OPENAI_API_KEY);
 const express = require('express');
 const cors = require('cors');
 const fs = require('fs');
-const path = require('path');
 
 const { getState, updateState } = require('./stateManager');
 const { filterTopic } = require('./topicFilter');
@@ -13,6 +12,7 @@ const { validate } = require('./validator');
 const { buildResponse } = require('./responseBuilder');
 const { saveNews, getSavedNews } = require('./saveNews');
 const { addRecord, getRecords } = require('./records');
+const { supabase, getTodayNews } = require('./supabase');
 
 const app = express();
 app.use(cors());
@@ -96,7 +96,8 @@ app.post('/chat', async (req, res) => {
     const userInput = messages?.[messages.length - 1]?.content || '';
     let newsTitle = '';
     try {
-      newsTitle = JSON.parse(fs.readFileSync(path.join(__dirname, 'today-news.json'), 'utf-8')).title || '';
+      const todayNews = await getTodayNews();
+      newsTitle = todayNews?.title || '';
     } catch {}
     let topicStatus = 'ON_TOPIC';
     if (phase === 'CHAT') {
@@ -217,14 +218,15 @@ app.post('/send-notifications', async (req, res) => {
   }
 });
 
-app.post('/today-news', (req, res) => {
+app.post('/today-news', async (req, res) => {
   console.log('body:', req.body);
   try {
-    const news = JSON.parse(fs.readFileSync(path.join(__dirname, 'today-news.json'), 'utf-8'));
+    const news = await getTodayNews();
+    if (!news) return res.status(404).json({ error: '오늘 뉴스가 없습니다.' });
     res.json(news);
   } catch (e) {
     console.log('today-news 에러:', e.message);
-    res.status(500).json({ error: 'today-news.json을 읽을 수 없습니다.' });
+    res.status(500).json({ error: e.message });
   }
 });
 
@@ -406,6 +408,89 @@ app.post('/generate-image', async (req, res) => {
     console.log('[generate-image] 에러:', e.message);
     res.status(500).json({ error: e.message });
   }
+});
+
+
+// ── /start-image-generation ──────────────────────────────────────────────────
+// select-news.js 완료 후 트리거. 오늘 뉴스 기반으로 필요한 이미지 조합 생성 후
+// Supabase Storage yoissue-images 버킷에 업로드.
+// body: { category, tag, title }
+
+const IMAGE_COMBOS = [
+  { character: '하나',  charKey: 'hana',    emotion: 'positive' },
+  { character: '하나',  charKey: 'hana',    emotion: 'worry' },
+  { character: '준혁', charKey: 'junhyuk', emotion: 'positive' },
+  { character: '준혁', charKey: 'junhyuk', emotion: 'worry' },
+];
+
+app.post('/start-image-generation', async (req, res) => {
+  const { category, title } = req.body;
+  if (!category || !title) {
+    return res.status(400).json({ error: 'category, title 필요' });
+  }
+
+  const SD_URL = process.env.SD_LOCAL_URL;
+  if (!SD_URL) return res.status(500).json({ error: 'SD_LOCAL_URL 환경변수 미설정' });
+
+  const today = new Date().toISOString().slice(0, 10);
+  const results = [];
+
+  // 즉시 202 응답 후 백그라운드 생성 (이미지 생성은 오래 걸림)
+  res.json({ ok: true, message: `이미지 생성 시작 (${IMAGE_COMBOS.length}개)`, date: today });
+
+  for (const combo of IMAGE_COMBOS) {
+    const label = `${combo.charKey}_${combo.emotion}`;
+    try {
+      console.log(`[start-image-generation] 생성 중: ${label}`);
+
+      // 1. GPT 프롬프트 생성
+      const imagePrompt = await buildImagePrompt({
+        category,
+        emotion:   combo.emotion,
+        character: combo.character,
+        newsTitle: title,
+      });
+
+      // 2. ComfyUI 생성 요청
+      const workflow = buildComfyWorkflow(imagePrompt);
+      const queueRes = await fetch(`${SD_URL}/prompt`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ prompt: workflow }),
+      });
+      const queueData = await queueRes.json();
+      const promptId  = queueData.prompt_id;
+      if (!promptId) throw new Error('prompt_id 없음: ' + JSON.stringify(queueData));
+
+      // 3. /history 폴링
+      const imageInfo = await pollComfyHistory(SD_URL, promptId);
+
+      // 4. 이미지 바이너리 가져오기
+      const viewUrl = `${SD_URL}/view?filename=${encodeURIComponent(imageInfo.filename)}&subfolder=${encodeURIComponent(imageInfo.subfolder || '')}&type=${imageInfo.type || 'output'}`;
+      const imgRes  = await fetch(viewUrl);
+      if (!imgRes.ok) throw new Error(`ComfyUI /view 실패: ${imgRes.status}`);
+      const buffer = await imgRes.arrayBuffer();
+
+      // 5. Supabase Storage 업로드
+      // 경로: {date}/{charKey}/{emotion}.png
+      const storagePath = `${today}/${combo.charKey}/${combo.emotion}.png`;
+      const { error: uploadError } = await supabase.storage
+        .from('yoissue-images')
+        .upload(storagePath, Buffer.from(buffer), {
+          contentType: 'image/png',
+          upsert: true,
+        });
+      if (uploadError) throw new Error('Storage 업로드 오류: ' + uploadError.message);
+
+      console.log(`[start-image-generation] 완료: ${storagePath}`);
+      results.push({ label, storagePath, ok: true });
+    } catch (e) {
+      console.error(`[start-image-generation] 실패: ${label}`, e.message);
+      results.push({ label, ok: false, error: e.message });
+    }
+  }
+
+  console.log('[start-image-generation] 전체 완료:', results);
 });
 
 
