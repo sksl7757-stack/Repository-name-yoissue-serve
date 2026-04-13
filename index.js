@@ -70,7 +70,7 @@ app.post('/chat-opening', async (req, res) => {
 
 // /chat — harness orchestration
 app.post('/chat', async (req, res) => {
-  const { type, messages, character, memory, perspectiveStep = 0 } = req.body;
+  const { type, messages, character, memory, perspectiveStep = 0, primaryCharName = null, primaryComment = null, primaryEmotion = null } = req.body;
   try {
     // PERSPECTIVE_NEXT: 시스템 트리거 — topic 검사 없이 바로 생성
     if (type === 'PERSPECTIVE_NEXT') {
@@ -104,7 +104,7 @@ app.post('/chat', async (req, res) => {
     }
 
     // 3. generator 실행 (말투/스타일만 담당)
-    const rawReply = await generateReply({ character, messages, memory, perspectiveStep, phase });
+    const rawReply = await generateReply({ character, messages, memory, perspectiveStep, phase, primaryCharName, primaryComment, primaryEmotion });
     console.log('generator reply:', rawReply);
 
     // 4. validator 실행 (질문 추가/제거, 주제 이탈 — 코드에서만 결정)
@@ -259,6 +259,153 @@ app.get('/records', (req, res) => {
 app.post('/today-news-test', (req, res) => {
   console.log('test route body:', req.body);
   res.json({ ok: true, message: 'test success' });
+});
+
+// ── /generate-image ──────────────────────────────────────────────────────────
+// body: { category, emotion, character, newsTitle }
+// 1. GPT로 영어 이미지 프롬프트 생성
+// 2. ComfyUI /prompt 로 이미지 생성 요청
+// 3. /history 폴링 → 완성된 이미지 base64 반환
+
+async function buildImagePrompt({ category, emotion, character, newsTitle }) {
+  const OPENAI_KEY = process.env.OPENAI_API_KEY?.replace(/['"]/g, '');
+  const systemMsg = `You are an AI that writes image generation prompts for a Korean news app.
+The app has two characters: Hana (female, warm, friendly) and Junhyuk (male, calm, analytical).
+Write a concise English prompt (under 80 words) for a webtoon/anime-style illustration that:
+- Reflects the news topic and emotional tone
+- Shows the character reacting to the news
+- Uses soft cel-shading, clean lines, pastel background
+Return ONLY the prompt text, nothing else.`;
+
+  const userMsg = `Character: ${character}, Category: ${category}, Emotion: ${emotion}, News: ${newsTitle}`;
+
+  const res = await fetch('https://api.openai.com/v1/chat/completions', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${OPENAI_KEY}` },
+    body: JSON.stringify({
+      model: 'gpt-4o-mini',
+      max_tokens: 150,
+      messages: [
+        { role: 'system', content: systemMsg },
+        { role: 'user',   content: userMsg },
+      ],
+    }),
+  });
+  const data = await res.json();
+  if (data.error) throw new Error(data.error.message);
+  return data.choices[0].message.content.trim();
+}
+
+function buildComfyWorkflow(positivePrompt) {
+  const negativePrompt = 'ugly, blurry, low quality, watermark, text, deformed, extra limbs';
+  const seed = Math.floor(Math.random() * 2 ** 32);
+  return {
+    '1': {
+      class_type: 'CheckpointLoaderSimple',
+      inputs: { ckpt_name: process.env.SD_MODEL_NAME || 'v1-5-pruned-emaonly.safetensors' },
+    },
+    '2': {
+      class_type: 'CLIPTextEncode',
+      inputs: { text: positivePrompt, clip: ['1', 1] },
+    },
+    '3': {
+      class_type: 'CLIPTextEncode',
+      inputs: { text: negativePrompt, clip: ['1', 1] },
+    },
+    '4': {
+      class_type: 'EmptyLatentImage',
+      inputs: { width: 512, height: 512, batch_size: 1 },
+    },
+    '5': {
+      class_type: 'KSampler',
+      inputs: {
+        model:        ['1', 0],
+        positive:     ['2', 0],
+        negative:     ['3', 0],
+        latent_image: ['4', 0],
+        seed,
+        steps:        20,
+        cfg:          7,
+        sampler_name: 'euler',
+        scheduler:    'normal',
+        denoise:      1.0,
+      },
+    },
+    '6': {
+      class_type: 'VAEDecode',
+      inputs: { samples: ['5', 0], vae: ['1', 2] },
+    },
+    '7': {
+      class_type: 'SaveImage',
+      inputs: { images: ['6', 0], filename_prefix: 'yoissue' },
+    },
+  };
+}
+
+async function pollComfyHistory(baseUrl, promptId, maxWaitMs = 120000) {
+  const interval = 2000;
+  const deadline = Date.now() + maxWaitMs;
+
+  while (Date.now() < deadline) {
+    await new Promise(r => setTimeout(r, interval));
+    const res  = await fetch(`${baseUrl}/history/${promptId}`);
+    const data = await res.json();
+    const entry = data[promptId];
+    if (!entry) continue;
+
+    const outputs = entry.outputs || {};
+    for (const nodeId of Object.keys(outputs)) {
+      const images = outputs[nodeId]?.images;
+      if (images?.length) return images[0]; // { filename, subfolder, type }
+    }
+  }
+  throw new Error('ComfyUI 이미지 생성 타임아웃');
+}
+
+app.post('/generate-image', async (req, res) => {
+  const { category, emotion, character, newsTitle } = req.body;
+  if (!category || !emotion || !character || !newsTitle) {
+    return res.status(400).json({ error: 'category, emotion, character, newsTitle 필요' });
+  }
+
+  const SD_URL = process.env.SD_LOCAL_URL;
+  if (!SD_URL) return res.status(500).json({ error: 'SD_LOCAL_URL 환경변수 미설정' });
+
+  try {
+    // 1. GPT로 영어 프롬프트 생성
+    const imagePrompt = await buildImagePrompt({ category, emotion, character, newsTitle });
+    console.log('[generate-image] prompt:', imagePrompt);
+
+    // 2. ComfyUI /prompt 에 워크플로 전송
+    const workflow = buildComfyWorkflow(imagePrompt);
+    const queueRes = await fetch(`${SD_URL}/prompt`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ prompt: workflow }),
+    });
+    const queueData = await queueRes.json();
+    const promptId  = queueData.prompt_id;
+    if (!promptId) throw new Error('ComfyUI prompt_id 없음: ' + JSON.stringify(queueData));
+    console.log('[generate-image] prompt_id:', promptId);
+
+    // 3. /history 폴링 → 이미지 파일 정보 획득
+    const imageInfo = await pollComfyHistory(SD_URL, promptId);
+    console.log('[generate-image] imageInfo:', imageInfo);
+
+    // 4. /view 로 이미지 바이너리 가져오기
+    const viewUrl = `${SD_URL}/view?filename=${encodeURIComponent(imageInfo.filename)}&subfolder=${encodeURIComponent(imageInfo.subfolder || '')}&type=${imageInfo.type || 'output'}`;
+    const imgRes  = await fetch(viewUrl);
+    if (!imgRes.ok) throw new Error(`ComfyUI /view 실패: ${imgRes.status}`);
+
+    const buffer     = await imgRes.arrayBuffer();
+    const base64     = Buffer.from(buffer).toString('base64');
+    const mimeType   = imgRes.headers.get('content-type') || 'image/png';
+
+    res.json({ image: `data:${mimeType};base64,${base64}`, prompt: imagePrompt });
+  } catch (e) {
+    console.log('[generate-image] 에러:', e.message);
+    res.status(500).json({ error: e.message });
+  }
 });
 
 
