@@ -372,8 +372,8 @@ async function main() {
   if (dbError) throw new Error('Supabase 저장 오류: ' + dbError.message);
   console.log('  Supabase 저장 완료');
 
-  // 로컬 fallback용 today-news.json도 함께 유지
-  const outPath = path.join(__dirname, 'today-news.json');
+  // 로컬 fallback용 today-news.json도 함께 유지 (Vercel 환경에선 /tmp에 저장)
+  const outPath = path.join('/tmp', 'today-news.json');
   fs.writeFileSync(outPath, JSON.stringify({ ...selected, analysis }, null, 2), 'utf-8');
   console.log(`  로컬 저장 완료: ${outPath}`);
 
@@ -413,7 +413,4 @@ async function main() {
   console.log('[완료]');
 }
 
-main().catch(e => {
-  console.error('[에러]', e.message);
-  process.exit(1);
-});
+module.exports = { main };
