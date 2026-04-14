@@ -1,40 +1,58 @@
-// records.js — 기록 저장/조회 (파일 기반)
-// ⚠️ Vercel 서버리스 환경에서 /tmp는 요청 간 유지되지 않음 (cold start마다 초기화).
-// 영구 저장이 필요하면 Supabase records 테이블로 마이그레이션하세요.
-const fs = require('fs');
-const RECORDS_PATH = '/tmp/records.json';
-
-function readAll() {
-  try { return JSON.parse(fs.readFileSync(RECORDS_PATH, 'utf-8')); }
-  catch { return {}; }
-}
-
-function writeAll(data) {
-  try { fs.writeFileSync(RECORDS_PATH, JSON.stringify(data), 'utf-8'); } catch {}
-}
+// records.js — 기록 저장/조회 (Supabase records 테이블)
+const { supabase } = require('./supabase');
 
 /**
  * 기록 저장 — 같은 newsId는 1번만
  * @param {string} userId
  * @param {{ newsId, title, character, userChoice, createdAt }} record
+ * @returns {Promise<{ success: boolean, message: string }>}
  */
-function addRecord(userId, record) {
-  const data = readAll();
-  if (!data[userId]) data[userId] = [];
-  const already = data[userId].some(r => r.newsId === record.newsId);
-  if (already) return { success: false, message: '이미 저장됨' };
-  data[userId].push(record);
-  writeAll(data);
+async function addRecord(userId, record) {
+  const { data: existing, error: selectError } = await supabase
+    .from('records')
+    .select('news_id')
+    .eq('user_id', userId)
+    .eq('news_id', record.newsId)
+    .maybeSingle();
+
+  if (selectError) throw new Error('Supabase 조회 오류: ' + selectError.message);
+  if (existing) return { success: false, message: '이미 저장됨' };
+
+  const { error: insertError } = await supabase
+    .from('records')
+    .insert({
+      user_id: userId,
+      news_id: record.newsId,
+      title: record.title,
+      character: record.character,
+      user_choice: record.userChoice,
+      created_at: record.createdAt || new Date().toISOString(),
+    });
+
+  if (insertError) throw new Error('Supabase 저장 오류: ' + insertError.message);
   return { success: true };
 }
 
 /**
  * 유저의 기록 목록 조회 (최신순)
+ * @param {string} userId
+ * @returns {Promise<Array>}
  */
-function getRecords(userId) {
-  const data = readAll();
-  const list = data[userId] || [];
-  return [...list].reverse();
+async function getRecords(userId) {
+  const { data, error } = await supabase
+    .from('records')
+    .select('news_id, title, character, user_choice, created_at')
+    .eq('user_id', userId)
+    .order('created_at', { ascending: false });
+
+  if (error) throw new Error('Supabase 조회 오류: ' + error.message);
+  return (data || []).map(r => ({
+    newsId: r.news_id,
+    title: r.title,
+    character: r.character,
+    userChoice: r.user_choice,
+    createdAt: r.created_at,
+  }));
 }
 
 module.exports = { addRecord, getRecords };

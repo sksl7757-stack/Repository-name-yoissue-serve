@@ -1,8 +1,7 @@
 // generator.js — 순수 생성기.
-const fs = require('fs');
-const path = require('path');
 // 캐릭터 말투와 스타일만 담당. 질문 여부 / 주제 판단 로직 없음 — 모두 validator 책임.
 
+const { getTodayNews } = require('./supabase');
 const { hanaPrompt, hanaCorePersona }       = require('./persona/hana/prompt');
 const { junhyukPrompt, junhyukCorePersona } = require('./persona/junhyuk/prompt');
 
@@ -20,7 +19,7 @@ function getCharacterPrompt(character) {
   return CHARACTER_MAP[character] || hanaPrompt;
 }
 
-function buildSystemPrompt(character, memory, { isPerspectiveRequest = false, perspectiveStep = 0, phase = 'INIT', primaryCharName = null, primaryComment = null, primaryEmotion = null } = {}) {
+async function buildSystemPrompt(character, memory, { isPerspectiveRequest = false, perspectiveStep = 0, phase = 'INIT', primaryCharName = null, primaryComment = null, primaryEmotion = null } = {}) {
   const basePrompt = getCharacterPrompt(character);
   const activeBasePrompt = primaryCharName
     ? (CHARACTER_CORE_MAP[character] || hanaCorePersona)
@@ -30,10 +29,15 @@ function buildSystemPrompt(character, memory, { isPerspectiveRequest = false, pe
   let newsDetailBlock = '';
   if (!primaryCharName) {
     try {
-      const news = JSON.parse(fs.readFileSync(path.join('/tmp', 'today-news.json'), 'utf-8'));
-      const summaryText = Array.isArray(news.summary) ? news.summary.join(' ') : '';
-      const bodyText = news.content && news.content.length >= 100 ? news.content : summaryText;
-      newsDetailBlock = `\n\n【오늘 뉴스 — 반드시 이 내용만 기반으로 답변할 것】\n제목: ${news.title}\n요약: ${summaryText}\n${bodyText ? `본문: ${bodyText}` : ''}\n\n⚠️ 이 뉴스 외 다른 뉴스·과거 사례 언급 절대 금지.`;
+      const news = await getTodayNews();
+      if (news) {
+        const summaryRaw = news.summary;
+        const summaryText = Array.isArray(summaryRaw)
+          ? summaryRaw.join(' ')
+          : (summaryRaw || '');
+        const bodyText = news.content && news.content.length >= 100 ? news.content : summaryText;
+        newsDetailBlock = `\n\n【오늘 뉴스 — 반드시 이 내용만 기반으로 답변할 것】\n제목: ${news.title}\n요약: ${summaryText}\n${bodyText ? `본문: ${bodyText}` : ''}\n\n⚠️ 이 뉴스 외 다른 뉴스·과거 사례 언급 절대 금지.`;
+      }
     } catch {}
   }
 
@@ -127,7 +131,7 @@ const VALID_EMOTIONS = new Set(['positive', 'negative']);
 
 async function generateReply({ character, messages, memory, perspectiveStep = 0, isPerspectiveRequest = false, phase = 'INIT', primaryCharName = null, primaryComment = null, primaryEmotion = null }) {
   const OPENAI_KEY = process.env.OPENAI_API_KEY?.replace(/['"]/g, '');
-  const systemPrompt = buildSystemPrompt(character, memory, { isPerspectiveRequest, perspectiveStep, phase, primaryCharName, primaryComment, primaryEmotion }) + JSON_FORMAT_RULE;
+  const systemPrompt = await buildSystemPrompt(character, memory, { isPerspectiveRequest, perspectiveStep, phase, primaryCharName, primaryComment, primaryEmotion }) + JSON_FORMAT_RULE;
 
   const response = await fetch('https://api.openai.com/v1/chat/completions', {
     method: 'POST',

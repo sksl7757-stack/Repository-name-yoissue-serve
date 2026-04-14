@@ -1,39 +1,45 @@
-// saveNews.js — 뉴스 저장 기능 (파일 기반 간단 구현)
-// ⚠️ Vercel 서버리스 환경에서 /tmp는 요청 간 유지되지 않음 (cold start마다 초기화).
-// 영구 저장이 필요하면 Supabase saved_news 테이블로 마이그레이션하세요.
-const fs = require('fs');
-const SAVED_PATH = '/tmp/saved-news.json';
-
-function readSaved() {
-  try { return JSON.parse(fs.readFileSync(SAVED_PATH, 'utf-8')); }
-  catch { return {}; }
-}
-
-function writeSaved(data) {
-  try { fs.writeFileSync(SAVED_PATH, JSON.stringify(data), 'utf-8'); } catch {}
-}
+// saveNews.js — 뉴스 저장/조회 (Supabase saved_news 테이블)
+const { supabase } = require('./supabase');
 
 /**
  * 뉴스 저장
- * @returns {{ success: boolean, message: string }}
+ * @param {string} userId
+ * @param {string} newsId
+ * @returns {Promise<{ success: boolean, message: string }>}
  */
-function saveNews(userId, newsId) {
-  const data = readSaved();
-  if (!data[userId]) data[userId] = [];
-  const already = data[userId].some(item => item.newsId === newsId);
-  if (already) return { success: false, message: '이미 저장됨' };
-  data[userId].push({ newsId, savedAt: Date.now() });
-  writeSaved(data);
+async function saveNews(userId, newsId) {
+  const { data: existing, error: selectError } = await supabase
+    .from('saved_news')
+    .select('news_id')
+    .eq('user_id', userId)
+    .eq('news_id', newsId)
+    .maybeSingle();
+
+  if (selectError) throw new Error('Supabase 조회 오류: ' + selectError.message);
+  if (existing) return { success: false, message: '이미 저장됨' };
+
+  const { error: insertError } = await supabase
+    .from('saved_news')
+    .insert({ user_id: userId, news_id: newsId, saved_at: new Date().toISOString() });
+
+  if (insertError) throw new Error('Supabase 저장 오류: ' + insertError.message);
   return { success: true, message: '저장됨' };
 }
 
 /**
  * 유저의 저장 목록 조회
- * @returns {Array<{ newsId: string, savedAt: number }>}
+ * @param {string} userId
+ * @returns {Promise<Array<{ newsId: string, savedAt: string }>>}
  */
-function getSavedNews(userId) {
-  const data = readSaved();
-  return data[userId] || [];
+async function getSavedNews(userId) {
+  const { data, error } = await supabase
+    .from('saved_news')
+    .select('news_id, saved_at')
+    .eq('user_id', userId)
+    .order('saved_at', { ascending: false });
+
+  if (error) throw new Error('Supabase 조회 오류: ' + error.message);
+  return (data || []).map(r => ({ newsId: r.news_id, savedAt: r.saved_at }));
 }
 
 module.exports = { saveNews, getSavedNews };

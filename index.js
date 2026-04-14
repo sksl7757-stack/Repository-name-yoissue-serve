@@ -234,32 +234,48 @@ app.post('/today-news', async (req, res) => {
   }
 });
 
-app.post('/save-news', (req, res) => {
+app.post('/save-news', async (req, res) => {
   const { userId, newsId } = req.body;
   if (!userId || !newsId) return res.status(400).json({ error: 'userId와 newsId 필요' });
-  const result = saveNews(userId, newsId);
-  res.json(result);
+  try {
+    const result = await saveNews(userId, newsId);
+    res.json(result);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
 });
 
-app.get('/saved-news', (req, res) => {
+app.get('/saved-news', async (req, res) => {
   const { userId } = req.query;
   if (!userId) return res.status(400).json({ error: 'userId 필요' });
-  const list = getSavedNews(userId);
-  res.json({ savedNews: list });
+  try {
+    const list = await getSavedNews(userId);
+    res.json({ savedNews: list });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
 });
 
-app.post('/records', (req, res) => {
+app.post('/records', async (req, res) => {
   const { userId, newsId, title, character, userChoice, createdAt } = req.body;
   if (!userId || !newsId) return res.status(400).json({ error: 'userId와 newsId 필요' });
-  const result = addRecord(userId, { newsId, title, character, userChoice, createdAt });
-  res.json(result);
+  try {
+    const result = await addRecord(userId, { newsId, title, character, userChoice, createdAt });
+    res.json(result);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
 });
 
-app.get('/records', (req, res) => {
+app.get('/records', async (req, res) => {
   const { userId } = req.query;
   if (!userId) return res.status(400).json({ error: 'userId 필요' });
-  const list = getRecords(userId);
-  res.json({ records: list });
+  try {
+    const list = await getRecords(userId);
+    res.json({ records: list });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
 });
 
 app.post('/today-news-test', (req, res) => {
