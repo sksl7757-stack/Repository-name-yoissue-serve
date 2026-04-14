@@ -30,7 +30,7 @@ function buildSystemPrompt(character, memory, { isPerspectiveRequest = false, pe
   let newsDetailBlock = '';
   if (!primaryCharName) {
     try {
-      const news = JSON.parse(fs.readFileSync(path.join(__dirname, 'today-news.json'), 'utf-8'));
+      const news = JSON.parse(fs.readFileSync(path.join('/tmp', 'today-news.json'), 'utf-8'));
       const summaryText = Array.isArray(news.summary) ? news.summary.join(' ') : '';
       const bodyText = news.content && news.content.length >= 100 ? news.content : summaryText;
       newsDetailBlock = `\n\n【오늘 뉴스 — 반드시 이 내용만 기반으로 답변할 것】\n제목: ${news.title}\n요약: ${summaryText}\n${bodyText ? `본문: ${bodyText}` : ''}\n\n⚠️ 이 뉴스 외 다른 뉴스·과거 사례 언급 절대 금지.`;
@@ -101,21 +101,23 @@ function buildSystemPrompt(character, memory, { isPerspectiveRequest = false, pe
   const activeCommonPrinciples  = isSecondary ? '' : commonPrinciples;
   const activeStateRule         = isSecondary ? '' : stateRule;
 
-  return primaryDirectionRule
-    + secondaryFormatRule
-    + activeBasePrompt
-    + newsDetailBlock
-    + newsBlockRule
-    + memoryBlock
-    + activeCommonPrinciples
-    + activeHardRule
-    + noQuestionRule
-    + activeStateRule
-    + activeStepInfo
-    + activePerspective
-    + activeActionRule
-    + activeCharacterLock
-    + secondaryContextBlock;
+  return [
+    primaryDirectionRule,
+    secondaryFormatRule,
+    activeBasePrompt,
+    newsDetailBlock,
+    newsBlockRule,
+    memoryBlock,
+    activeCommonPrinciples,
+    activeHardRule,
+    noQuestionRule,
+    activeStateRule,
+    activeStepInfo,
+    activePerspective,
+    activeActionRule,
+    activeCharacterLock,
+    secondaryContextBlock,
+  ].filter(Boolean).join('');
 }
 
 // JSON 출력 형식 지시 — generateReply 전용 (chat-opening 등 다른 엔드포인트에 영향 없음)

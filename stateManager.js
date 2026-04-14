@@ -15,7 +15,8 @@ const PHASE = { INIT: 'INIT', CHAT: 'CHAT' };
  */
 function getState(messages = [], perspectiveStep = 0) {
   const assistantMessages = messages.filter(m => m.role === 'assistant');
-  const questionAsked = assistantMessages.some(m => m.content && m.content.includes('?'));
+  // includes('?') 대신 끝이 ?인지 확인 — URL·이모지 설명의 ? 오판 방지
+  const questionAsked = assistantMessages.some(m => m.content && /\?\s*$/.test(m.content.trim()));
   const phase = questionAsked ? PHASE.CHAT : PHASE.INIT;
   return { phase, questionAsked, perspectiveStep };
 }

@@ -1,28 +1,13 @@
 const path = require('path');
 const fs = require('fs');
+const { loadEnv } = require('./loadEnv');
 const { supabase } = require('./supabase');
 const { analyzeTrend }  = require('./analyzeTrend');
 const { scoreImpact }   = require('./scoreImpact');
 const { scoreRepresent } = require('./scoreRepresent');
 const { combineScore, resolveWeights } = require('./combineScore');
 
-// .env를 fs로 직접 읽어 파싱 (dotenvx 암호화 우회). 파일 없으면 process.env fallback.
-const envPath = path.join(__dirname, '.env');
-if (fs.existsSync(envPath)) {
-  fs.readFileSync(envPath, 'utf-8').split('\n').forEach(line => {
-    const trimmed = line.trim();
-    if (!trimmed || trimmed.startsWith('#')) return;
-    const eq = trimmed.indexOf('=');
-    if (eq === -1) return;
-    const key = trimmed.slice(0, eq).trim();
-    // 따옴표 제거 후 인라인 주석(# ...) 제거
-    const raw = trimmed.slice(eq + 1).trim().replace(/^['"]|['"]$/g, '');
-    const val = raw.replace(/\s+#.*$/, '').trim();
-    if (key) process.env[key] = val;
-  });
-} else {
-  console.log('.env 파일 없음 — process.env(GitHub Secrets) 사용');
-}
+loadEnv();
 
 // 헤더 값에 비ASCII 문자가 포함되면 fetch ByteString 오류 발생 → 제거
 const NAVER_ID = (process.env.NAVER_CLIENT_ID || '').replace(/[^\x20-\x7E]/g, '');
@@ -397,7 +382,7 @@ async function main() {
   }
 
   // 저장된 토큰들에 푸시 알림 발송
-  const SERVER_URL = 'https://repository-name-yoissue-serve.vercel.app';
+  const SERVER_URL = process.env.SERVER_URL || 'https://repository-name-yoissue-serve.vercel.app';
   try {
     const notiRes = await fetch(`${SERVER_URL}/send-notifications`, {
       method: 'POST',

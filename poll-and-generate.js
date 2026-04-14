@@ -19,25 +19,11 @@
 
 'use strict';
 
-const path = require('path');
-const fs   = require('fs');
-
-// ── .env 수동 로드 ─────────────────────────────────────────────────────────────
-const envPath = path.join(__dirname, '.env');
-if (fs.existsSync(envPath)) {
-  fs.readFileSync(envPath, 'utf-8').split('\n').forEach(line => {
-    const trimmed = line.trim();
-    if (!trimmed || trimmed.startsWith('#')) return;
-    const eq = trimmed.indexOf('=');
-    if (eq === -1) return;
-    const key = trimmed.slice(0, eq).trim();
-    const raw = trimmed.slice(eq + 1).trim().replace(/^['"]|['"]$/g, '');
-    const val = raw.replace(/\s+#.*$/, '').trim();
-    if (key) process.env[key] = val;
-  });
-}
+const { loadEnv } = require('./loadEnv');
+loadEnv();
 
 const { createClient } = require('@supabase/supabase-js');
+const { buildComfyWorkflow } = require('./comfyUtils');
 
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_KEY = process.env.SUPABASE_SERVICE_KEY;
@@ -143,53 +129,6 @@ Return ONLY the prompt text, nothing else.`;
   return data.choices[0].message.content.trim();
 }
 
-// ── ComfyUI: 워크플로 빌드 ──────────────────────────────────────────────────────
-function buildComfyWorkflow(positivePrompt) {
-  const negativePrompt = 'ugly, blurry, low quality, watermark, text, deformed, extra limbs';
-  const seed = Math.floor(Math.random() * 2 ** 32);
-  return {
-    '1': {
-      class_type: 'CheckpointLoaderSimple',
-      inputs: { ckpt_name: SD_MODEL },
-    },
-    '2': {
-      class_type: 'CLIPTextEncode',
-      inputs: { text: positivePrompt, clip: ['1', 1] },
-    },
-    '3': {
-      class_type: 'CLIPTextEncode',
-      inputs: { text: negativePrompt, clip: ['1', 1] },
-    },
-    '4': {
-      class_type: 'EmptyLatentImage',
-      inputs: { width: 512, height: 512, batch_size: 1 },
-    },
-    '5': {
-      class_type: 'KSampler',
-      inputs: {
-        model:        ['1', 0],
-        positive:     ['2', 0],
-        negative:     ['3', 0],
-        latent_image: ['4', 0],
-        seed,
-        steps:        20,
-        cfg:          7,
-        sampler_name: 'euler',
-        scheduler:    'normal',
-        denoise:      1.0,
-      },
-    },
-    '6': {
-      class_type: 'VAEDecode',
-      inputs: { samples: ['5', 0], vae: ['1', 2] },
-    },
-    '7': {
-      class_type: 'SaveImage',
-      inputs: { images: ['6', 0], filename_prefix: 'yoissue' },
-    },
-  };
-}
-
 // ── ComfyUI: /history 폴링 ──────────────────────────────────────────────────────
 async function pollComfyHistory(promptId, maxWaitMs = 180000) {
   const interval = 3000;
@@ -236,7 +175,7 @@ async function generateAndUpload({ date, category, newsTitle, combo }) {
   console.log(`         prompt: ${imagePrompt.slice(0, 60)}...`);
 
   // 3. ComfyUI에 워크플로 전송
-  const workflow  = buildComfyWorkflow(imagePrompt);
+  const workflow  = buildComfyWorkflow(imagePrompt, SD_MODEL);
   const queueRes  = await fetch(`${COMFY_URL}/prompt`, {
     method:  'POST',
     headers: { 'Content-Type': 'application/json' },

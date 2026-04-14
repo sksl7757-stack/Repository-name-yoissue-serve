@@ -1,4 +1,6 @@
 // saveNews.js — 뉴스 저장 기능 (파일 기반 간단 구현)
+// ⚠️ Vercel 서버리스 환경에서 /tmp는 요청 간 유지되지 않음 (cold start마다 초기화).
+// 영구 저장이 필요하면 Supabase saved_news 테이블로 마이그레이션하세요.
 const fs = require('fs');
 const SAVED_PATH = '/tmp/saved-news.json';
 

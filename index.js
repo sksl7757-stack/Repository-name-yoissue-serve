@@ -1,6 +1,4 @@
 require('dotenv').config({ path: __dirname + '/.env' });
-console.log('ENV PATH:', __dirname);
-console.log('API KEY FULL:', process.env.OPENAI_API_KEY);
 const express = require('express');
 const cors = require('cors');
 
@@ -12,6 +10,7 @@ const { buildResponse } = require('./responseBuilder');
 const { saveNews, getSavedNews } = require('./saveNews');
 const { addRecord, getRecords } = require('./records');
 const { supabase, getTodayNews } = require('./supabase');
+const { buildComfyWorkflow } = require('./comfyUtils');
 
 const app = express();
 app.use(cors());
@@ -303,52 +302,6 @@ Return ONLY the prompt text, nothing else.`;
   return data.choices[0].message.content.trim();
 }
 
-function buildComfyWorkflow(positivePrompt) {
-  const negativePrompt = 'ugly, blurry, low quality, watermark, text, deformed, extra limbs';
-  const seed = Math.floor(Math.random() * 2 ** 32);
-  return {
-    '1': {
-      class_type: 'CheckpointLoaderSimple',
-      inputs: { ckpt_name: process.env.SD_MODEL_NAME || 'v1-5-pruned-emaonly.safetensors' },
-    },
-    '2': {
-      class_type: 'CLIPTextEncode',
-      inputs: { text: positivePrompt, clip: ['1', 1] },
-    },
-    '3': {
-      class_type: 'CLIPTextEncode',
-      inputs: { text: negativePrompt, clip: ['1', 1] },
-    },
-    '4': {
-      class_type: 'EmptyLatentImage',
-      inputs: { width: 512, height: 512, batch_size: 1 },
-    },
-    '5': {
-      class_type: 'KSampler',
-      inputs: {
-        model:        ['1', 0],
-        positive:     ['2', 0],
-        negative:     ['3', 0],
-        latent_image: ['4', 0],
-        seed,
-        steps:        20,
-        cfg:          7,
-        sampler_name: 'euler',
-        scheduler:    'normal',
-        denoise:      1.0,
-      },
-    },
-    '6': {
-      class_type: 'VAEDecode',
-      inputs: { samples: ['5', 0], vae: ['1', 2] },
-    },
-    '7': {
-      class_type: 'SaveImage',
-      inputs: { images: ['6', 0], filename_prefix: 'yoissue' },
-    },
-  };
-}
-
 async function pollComfyHistory(baseUrl, promptId, maxWaitMs = 120000) {
   const interval = 2000;
   const deadline = Date.now() + maxWaitMs;
@@ -440,62 +393,69 @@ app.post('/start-image-generation', async (req, res) => {
   const today = new Date().toISOString().slice(0, 10);
   const results = [];
 
-  // 즉시 202 응답 후 백그라운드 생성 (이미지 생성은 오래 걸림)
+  // 즉시 응답 후 백그라운드 생성 (이미지 생성은 오래 걸림)
   res.json({ ok: true, message: `이미지 생성 시작 (${IMAGE_COMBOS.length}개)`, date: today });
 
-  for (const combo of IMAGE_COMBOS) {
-    const label = `${combo.charKey}_${combo.emotion}`;
+  // 백그라운드 처리 — 최상위 try-catch로 unhandled rejection 방지
+  (async () => {
     try {
-      console.log(`[start-image-generation] 생성 중: ${label}`);
+      for (const combo of IMAGE_COMBOS) {
+        const label = `${combo.charKey}_${combo.emotion}`;
+        try {
+          console.log(`[start-image-generation] 생성 중: ${label}`);
 
-      // 1. GPT 프롬프트 생성
-      const imagePrompt = await buildImagePrompt({
-        category,
-        emotion:   combo.emotion,
-        character: combo.character,
-        newsTitle: title,
-      });
+          // 1. GPT 프롬프트 생성
+          const imagePrompt = await buildImagePrompt({
+            category,
+            emotion:   combo.emotion,
+            character: combo.character,
+            newsTitle: title,
+          });
 
-      // 2. ComfyUI 생성 요청
-      const workflow = buildComfyWorkflow(imagePrompt);
-      const queueRes = await fetch(`${SD_URL}/prompt`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ prompt: workflow }),
-      });
-      const queueData = await queueRes.json();
-      const promptId  = queueData.prompt_id;
-      if (!promptId) throw new Error('prompt_id 없음: ' + JSON.stringify(queueData));
+          // 2. ComfyUI 생성 요청
+          const workflow = buildComfyWorkflow(imagePrompt);
+          const queueRes = await fetch(`${SD_URL}/prompt`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ prompt: workflow }),
+          });
+          const queueData = await queueRes.json();
+          const promptId  = queueData.prompt_id;
+          if (!promptId) throw new Error('prompt_id 없음: ' + JSON.stringify(queueData));
 
-      // 3. /history 폴링
-      const imageInfo = await pollComfyHistory(SD_URL, promptId);
+          // 3. /history 폴링
+          const imageInfo = await pollComfyHistory(SD_URL, promptId);
 
-      // 4. 이미지 바이너리 가져오기
-      const viewUrl = `${SD_URL}/view?filename=${encodeURIComponent(imageInfo.filename)}&subfolder=${encodeURIComponent(imageInfo.subfolder || '')}&type=${imageInfo.type || 'output'}`;
-      const imgRes  = await fetch(viewUrl);
-      if (!imgRes.ok) throw new Error(`ComfyUI /view 실패: ${imgRes.status}`);
-      const buffer = await imgRes.arrayBuffer();
+          // 4. 이미지 바이너리 가져오기
+          const viewUrl = `${SD_URL}/view?filename=${encodeURIComponent(imageInfo.filename)}&subfolder=${encodeURIComponent(imageInfo.subfolder || '')}&type=${imageInfo.type || 'output'}`;
+          const imgRes  = await fetch(viewUrl);
+          if (!imgRes.ok) throw new Error(`ComfyUI /view 실패: ${imgRes.status}`);
+          const buffer = await imgRes.arrayBuffer();
 
-      // 5. Supabase Storage 업로드
-      // 경로: {date}/{charKey}/{emotion}.png
-      const storagePath = `${today}/${combo.charKey}/${combo.emotion}.png`;
-      const { error: uploadError } = await supabase.storage
-        .from('yoissue-images')
-        .upload(storagePath, Buffer.from(buffer), {
-          contentType: 'image/png',
-          upsert: true,
-        });
-      if (uploadError) throw new Error('Storage 업로드 오류: ' + uploadError.message);
+          // 5. Supabase Storage 업로드
+          // 경로: {date}/{charKey}/{emotion}.png
+          const storagePath = `${today}/${combo.charKey}/${combo.emotion}.png`;
+          const { error: uploadError } = await supabase.storage
+            .from('yoissue-images')
+            .upload(storagePath, Buffer.from(buffer), {
+              contentType: 'image/png',
+              upsert: true,
+            });
+          if (uploadError) throw new Error('Storage 업로드 오류: ' + uploadError.message);
 
-      console.log(`[start-image-generation] 완료: ${storagePath}`);
-      results.push({ label, storagePath, ok: true });
+          console.log(`[start-image-generation] 완료: ${storagePath}`);
+          results.push({ label, storagePath, ok: true });
+        } catch (e) {
+          console.error(`[start-image-generation] 실패: ${label}`, e.message);
+          results.push({ label, ok: false, error: e.message });
+        }
+      }
+      console.log('[start-image-generation] 전체 완료:', results);
     } catch (e) {
-      console.error(`[start-image-generation] 실패: ${label}`, e.message);
-      results.push({ label, ok: false, error: e.message });
+      // 루프 밖 예상치 못한 에러 (fetch 자체 실패 등)
+      console.error('[start-image-generation] 치명적 오류:', e.message);
     }
-  }
-
-  console.log('[start-image-generation] 전체 완료:', results);
+  })();
 });
 
 

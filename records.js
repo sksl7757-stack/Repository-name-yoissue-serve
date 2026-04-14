@@ -1,4 +1,6 @@
 // records.js — 기록 저장/조회 (파일 기반)
+// ⚠️ Vercel 서버리스 환경에서 /tmp는 요청 간 유지되지 않음 (cold start마다 초기화).
+// 영구 저장이 필요하면 Supabase records 테이블로 마이그레이션하세요.
 const fs = require('fs');
 const RECORDS_PATH = '/tmp/records.json';
 
