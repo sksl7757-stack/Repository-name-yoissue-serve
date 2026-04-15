@@ -289,18 +289,8 @@ app.post('/today-news-test', (req, res) => {
 // 2. ComfyUI /prompt 로 이미지 생성 요청
 // 3. /history 폴링 → 완성된 이미지 base64 반환
 
-async function buildImagePrompt({ category, emotion, character, newsTitle }) {
+async function callGPT(systemMsg, userMsg) {
   const OPENAI_KEY = process.env.OPENAI_API_KEY?.replace(/['"]/g, '');
-  const systemMsg = `You are an AI that writes image generation prompts for a Korean news app.
-The app has two characters: Hana (female, warm, friendly) and Junhyuk (male, calm, analytical).
-Write a concise English prompt (under 80 words) for a webtoon/anime-style illustration that:
-- Reflects the news topic and emotional tone
-- Shows the character reacting to the news
-- Uses soft cel-shading, clean lines, pastel background
-Return ONLY the prompt text, nothing else.`;
-
-  const userMsg = `Character: ${character}, Category: ${category}, Emotion: ${emotion}, News: ${newsTitle}`;
-
   const res = await fetch('https://api.openai.com/v1/chat/completions', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${OPENAI_KEY}` },
@@ -316,6 +306,126 @@ Return ONLY the prompt text, nothing else.`;
   const data = await res.json();
   if (data.error) throw new Error(data.error.message);
   return data.choices[0].message.content.trim();
+}
+
+const SITUATION_SHOTS = [
+  {
+    label: 'wide establishing shot',
+    rule:  'Compose as a wide establishing shot — show the full environment, multiple figures spread across the frame, and the location clearly readable at a glance.',
+  },
+  {
+    label: 'medium group shot',
+    rule:  'Compose as a medium group shot — frame 3–5 people from the waist up, showing faces and interactions, with the location visible in the background.',
+  },
+  {
+    label: 'over-the-shoulder shot',
+    rule:  'Compose as an over-the-shoulder shot — the character\'s shoulder and back occupy one side of the frame, with the unfolding scene visible from their viewpoint.',
+  },
+  {
+    label: 'eye-level crowd shot',
+    rule:  'Compose at eye level from within the crowd — the character is among other people, all roughly the same scale, giving a feeling of being immersed in the scene.',
+  },
+];
+
+const AFTER_EMOTION_PROFILES = {
+  positive: {
+    state:      'relaxed and settled — gentle smile, soft eyes, upright but comfortable posture',
+    actions:    'sitting quietly with a warm drink, leaning back with hands resting, or gazing out a window with a calm expression',
+    background: 'bright and cozy — sunlit room, warm cafe, or soft afternoon light',
+    shotHint:   'full body visible — far enough to see the entire figure and surrounding space, face NOT dominant',
+  },
+  negative: {
+    state:      'exhausted and emotionally drained — eyes downcast, slumped shoulders, no energy left to react',
+    actions:    'slumped on a chair staring at nothing, lying on a bed fully clothed, or sitting on the floor with back against the wall',
+    background: 'dim and quiet — dark room with a single lamp, empty hallway, or late-night desk',
+    shotHint:   'full body visible — far enough to see collapsed posture and surrounding space, face NOT dominant',
+  },
+  unsure: {
+    state:      'emotionally detached and avoidant — blank expression, neither upset nor happy, deliberately not engaging with the topic',
+    actions:    'looking away from the screen, scrolling aimlessly without reading, or sitting with arms crossed staring into empty space',
+    background: 'neutral and unremarkable — plain room, ordinary desk, or featureless background that offers no distraction',
+    shotHint:   'full body visible — far enough to see the avoidant posture and surrounding space, face NOT dominant',
+  },
+};
+
+async function buildSituationPrompt({ category, emotion, character, newsTitle }) {
+  const shot = SITUATION_SHOTS[Math.floor(Math.random() * SITUATION_SHOTS.length)];
+  const atmosphereGuide =
+    emotion === 'positive' ? 'optimistic and energetic — people look relieved, celebrating, or motivated' :
+    emotion === 'negative' ? 'tense and somber — people look stressed, worried, or overwhelmed' :
+                             'uncertain and cautious — people look anxious or unsettled';
+
+  const systemMsg = `You are an AI that writes image generation prompts for a Korean news app.
+Write a concise English prompt (under 80 words) for a webtoon/anime-style illustration.
+
+Build the prompt in this exact order:
+1. News-derived situation keyword (e.g. "military blockade", "economic downturn", "factory closure")
+2. Specific real-world location that fits the news category:
+   - 정치/politics: government building exterior, parliament steps, press briefing room, presidential residence
+   - 군사/military: naval port, warship deck, military base, operations command center, harbor with warships
+   - 국제/international: airport terminal, embassy exterior, international conference hall, border checkpoint
+   - 경제/economy: stock exchange floor, bank lobby, office building, commercial district, factory floor
+   - 사회/society: hospital corridor, school courtyard, public square, community center
+   - 문화/culture: concert venue, museum hall, cultural festival grounds
+   - 과학/science: research lab, university campus, tech conference hall
+   Pick the ONE location that best fits the news title and category.
+3. Multiple people and their visible actions that fit the location (e.g. "soldiers standing at attention", "officers monitoring screens")
+4. Overall atmosphere: ${atmosphereGuide}
+5. The character (${character}) as ONE small figure in the scene, doing a contextually fitting action
+
+Hard rules:
+- ${shot.rule}
+- FAR SHOT, ZOOMED OUT — full scene must be visible
+- Character occupies a small portion of the frame — face not dominant
+- Subject small in frame, surrounded by environment and other people
+- NEVER close-up, NEVER portrait, NEVER face-filling-the-frame
+- Soft cel-shading, clean outlines, pastel background tones
+
+Return ONLY the prompt text, nothing else.`;
+
+  const userMsg = `News: ${newsTitle}\nCategory: ${category}\nCharacter: ${character}\nEmotion: ${emotion}`;
+  const generatedPrompt = await callGPT(systemMsg, userMsg);
+  const triggerWord    = character === '하나' ? 'hana' : 'junhyuk';
+  const qualityPrefix  = `(masterpiece:1.2), (best quality:1.2), highly detailed, far shot, zoomed out, subject small in frame, full scene visible, ${shot.label}, multiple people, scene-focused, soft cel-shading, `;
+  return `${qualityPrefix}${triggerWord}, ${generatedPrompt}`;
+}
+
+async function buildAfterPrompt({ emotion, character, newsTitle }) {
+  const profile = AFTER_EMOTION_PROFILES[emotion] || AFTER_EMOTION_PROFILES.unsure;
+
+  const systemMsg = `You are an AI that writes image generation prompts for a Korean news app.
+Write a concise English prompt (under 80 words) for a webtoon/anime-style illustration.
+
+Build the prompt in this exact order:
+1. The character (${character}) as the sole subject
+2. Emotional state: ${profile.state}
+3. Specific action: choose ONE from — ${profile.actions}
+4. Background: ${profile.background}
+
+Hard rules:
+- ${profile.shotHint}
+- FAR SHOT, ZOOMED OUT — full body and surrounding space must be visible
+- Character occupies a small portion of the frame — face not dominant
+- Emotion readable from body language and posture, NOT from facial close-up
+- ONE character only — NO multiple people
+- NEVER close-up, NEVER portrait, NEVER face-filling-the-frame
+- Soft cel-shading, clean outlines, pastel tones
+
+Return ONLY the prompt text, nothing else.`;
+
+  const userMsg = `Character: ${character}\nEmotion: ${emotion}\nNews context: ${newsTitle}`;
+  const generatedPrompt = await callGPT(systemMsg, userMsg);
+  const triggerWord    = character === '하나' ? 'hana' : 'junhyuk';
+  const qualityPrefix  = '(masterpiece:1.2), (best quality:1.2), highly detailed, far shot, zoomed out, full body visible, subject small in frame, face not dominant, single character, emotion-focused, soft cel-shading, ';
+  return `${qualityPrefix}${triggerWord}, ${generatedPrompt}`;
+}
+
+async function buildImagePrompt({ category, emotion, character, imageType, newsTitle }) {
+  if (imageType === 'situation') {
+    return buildSituationPrompt({ category, emotion, character, newsTitle });
+  } else {
+    return buildAfterPrompt({ emotion, character, newsTitle });
+  }
 }
 
 async function pollComfyHistory(baseUrl, promptId, maxWaitMs = 120000) {
@@ -391,10 +501,16 @@ app.post('/generate-image', async (req, res) => {
 // body: { category, tag, title }
 
 const IMAGE_COMBOS = [
-  { character: '하나',  charKey: 'hana',    emotion: 'positive' },
-  { character: '하나',  charKey: 'hana',    emotion: 'worry' },
-  { character: '준혁', charKey: 'junhyuk', emotion: 'positive' },
-  { character: '준혁', charKey: 'junhyuk', emotion: 'worry' },
+  { character: '하나',  charKey: 'hana',    imageType: 'situation', emotion: 'positive' },
+  { character: '하나',  charKey: 'hana',    imageType: 'situation', emotion: 'negative' },
+  { character: '하나',  charKey: 'hana',    imageType: 'after',     emotion: 'positive' },
+  { character: '하나',  charKey: 'hana',    imageType: 'after',     emotion: 'negative' },
+  { character: '하나',  charKey: 'hana',    imageType: 'after',     emotion: 'unsure'   },
+  { character: '준혁', charKey: 'junhyuk', imageType: 'situation', emotion: 'positive' },
+  { character: '준혁', charKey: 'junhyuk', imageType: 'situation', emotion: 'negative' },
+  { character: '준혁', charKey: 'junhyuk', imageType: 'after',     emotion: 'positive' },
+  { character: '준혁', charKey: 'junhyuk', imageType: 'after',     emotion: 'negative' },
+  { character: '준혁', charKey: 'junhyuk', imageType: 'after',     emotion: 'unsure'   },
 ];
 
 app.post('/start-image-generation', async (req, res) => {
@@ -416,7 +532,7 @@ app.post('/start-image-generation', async (req, res) => {
   (async () => {
     try {
       for (const combo of IMAGE_COMBOS) {
-        const label = `${combo.charKey}_${combo.emotion}`;
+        const label = `${combo.charKey}_${combo.imageType}_${combo.emotion}`;
         try {
           console.log(`[start-image-generation] 생성 중: ${label}`);
 
@@ -425,6 +541,7 @@ app.post('/start-image-generation', async (req, res) => {
             category,
             emotion:   combo.emotion,
             character: combo.character,
+            imageType: combo.imageType,
             newsTitle: title,
           });
 
@@ -448,23 +565,31 @@ app.post('/start-image-generation', async (req, res) => {
           if (!imgRes.ok) throw new Error(`ComfyUI /view 실패: ${imgRes.status}`);
           const buffer = await imgRes.arrayBuffer();
 
-          // 5. Supabase Storage 업로드
-          // 경로: {date}/{charKey}/{emotion}.png
-          const storagePath = `${today}/${combo.charKey}/${combo.emotion}.png`;
+          // 5. Supabase Storage 업로드 (폴더 기반 유니크 경로)
+          const imagePath = `${today}/${combo.charKey}/${combo.imageType}/${combo.emotion}/${Date.now()}.png`;
           const { error: uploadError } = await supabase.storage
             .from('yoissue-images')
-            .upload(storagePath, Buffer.from(buffer), {
+            .upload(imagePath, Buffer.from(buffer), {
               contentType: 'image/png',
-              upsert: true,
+              upsert: false,
+              cacheControl: '3600',
             });
           if (uploadError) throw new Error('Storage 업로드 오류: ' + uploadError.message);
 
-          console.log(`[start-image-generation] 완료: ${storagePath}`);
-          results.push({ label, storagePath, ok: true });
+          console.log(`[start-image-generation] 완료: ${imagePath}`);
+          results.push({ label, imagePath, ok: true });
         } catch (e) {
           console.error(`[start-image-generation] 실패: ${label}`, e.message);
           results.push({ label, ok: false, error: e.message });
         }
+      }
+      // 생성된 image_paths를 daily_news에 저장
+      const imagePaths = results.filter(r => r.ok).map(r => r.imagePath);
+      if (imagePaths.length > 0) {
+        const { error: updateError } = await supabase.from('daily_news')
+          .update({ image_paths: imagePaths })
+          .eq('date', today);
+        if (updateError) console.error('[start-image-generation] image_paths 저장 실패:', updateError.message);
       }
       console.log('[start-image-generation] 전체 완료:', results);
     } catch (e) {

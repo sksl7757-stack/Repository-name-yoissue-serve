@@ -1,5 +1,3 @@
-const path = require('path');
-const fs = require('fs');
 const { loadEnv } = require('./loadEnv');
 const { supabase } = require('./supabase');
 const { analyzeTrend }  = require('./analyzeTrend');
@@ -356,11 +354,6 @@ async function main() {
     .upsert(record, { onConflict: 'date' });
   if (dbError) throw new Error('Supabase 저장 오류: ' + dbError.message);
   console.log('  Supabase 저장 완료');
-
-  // 로컬 fallback용 today-news.json도 함께 유지 (Vercel 환경에선 /tmp에 저장)
-  const outPath = path.join('/tmp', 'today-news.json');
-  fs.writeFileSync(outPath, JSON.stringify({ ...selected, analysis }, null, 2), 'utf-8');
-  console.log(`  로컬 저장 완료: ${outPath}`);
 
   // 집 PC yoissue-server로 이미지 생성 트리거 (SD_LOCAL_URL = ngrok port 4000)
   const SD_LOCAL_URL = process.env.SD_LOCAL_URL;

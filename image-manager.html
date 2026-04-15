@@ -1,0 +1,458 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>YoIssue 이미지 관리</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      background: #f0f0f5;
+      color: #222;
+      min-height: 100vh;
+    }
+
+    header {
+      background: #7c5cbf;
+      color: #fff;
+      padding: 16px 24px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.15);
+    }
+    header h1 { font-size: 1.2rem; font-weight: 700; }
+    header span { font-size: 0.85rem; opacity: 0.8; }
+
+    #toolbar {
+      padding: 12px 24px;
+      background: #fff;
+      border-bottom: 1px solid #e0e0e0;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      flex-wrap: wrap;
+    }
+    button.btn {
+      padding: 7px 16px;
+      border: none;
+      border-radius: 8px;
+      cursor: pointer;
+      font-size: 0.875rem;
+      font-weight: 600;
+      transition: opacity 0.15s;
+    }
+    button.btn:hover { opacity: 0.85; }
+    button.btn:disabled { opacity: 0.4; cursor: not-allowed; }
+    .btn-primary { background: #7c5cbf; color: #fff; }
+    .btn-danger  { background: #e53935; color: #fff; }
+    .btn-outline { background: #fff; color: #7c5cbf; border: 1.5px solid #7c5cbf; }
+
+    #status {
+      margin-left: auto;
+      font-size: 0.82rem;
+      color: #666;
+    }
+
+    #content { padding: 24px; }
+
+    .date-group { margin-bottom: 36px; }
+    .date-label {
+      font-size: 1rem;
+      font-weight: 700;
+      color: #7c5cbf;
+      margin-bottom: 14px;
+      padding-bottom: 6px;
+      border-bottom: 2px solid #7c5cbf33;
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+      gap: 16px;
+    }
+
+    .card {
+      background: #fff;
+      border-radius: 12px;
+      overflow: hidden;
+      box-shadow: 0 1px 6px rgba(0,0,0,0.08);
+      transition: transform 0.15s, box-shadow 0.15s;
+      display: flex;
+      flex-direction: column;
+    }
+    .card:hover { transform: translateY(-2px); box-shadow: 0 4px 16px rgba(0,0,0,0.13); }
+
+    .card-img-wrap {
+      width: 100%;
+      height: 180px;
+      overflow: hidden;
+      cursor: zoom-in;
+      background: #eee;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .card-img-wrap img {
+      width: 100%;
+      height: 100%;
+      object-fit: contain;
+      transition: transform 0.2s;
+      display: block;
+    }
+    .card-img-wrap:hover img { transform: scale(1.04); }
+
+    .card-body {
+      padding: 8px 10px 10px;
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      gap: 5px;
+    }
+    .card-name {
+      font-size: 0.72rem;
+      color: #555;
+      word-break: break-all;
+      line-height: 1.4;
+    }
+    .badge {
+      display: inline-block;
+      padding: 2px 7px;
+      border-radius: 20px;
+      font-size: 0.68rem;
+      font-weight: 600;
+    }
+    .badge-situation { background: #e8f4fd; color: #1565c0; }
+    .badge-after     { background: #fce4ec; color: #c62828; }
+    .badge-positive  { background: #e8f5e9; color: #2e7d32; }
+    .badge-negative  { background: #fce4ec; color: #b71c1c; }
+    .badge-worry     { background: #fff8e1; color: #f57f17; }
+
+    .card-actions {
+      display: flex;
+      gap: 6px;
+      margin-top: 4px;
+    }
+    .card-actions button {
+      flex: 1;
+      padding: 5px 0;
+      border: none;
+      border-radius: 7px;
+      font-size: 0.75rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: opacity 0.15s;
+    }
+    .card-actions button:hover { opacity: 0.8; }
+    .btn-save   { background: #7c5cbf22; color: #7c5cbf; }
+    .btn-delete { background: #e5393522; color: #e53935; }
+
+    /* Lightbox */
+    #lightbox {
+      display: none;
+      position: fixed;
+      inset: 0;
+      background: rgba(0,0,0,0.85);
+      z-index: 1000;
+      align-items: center;
+      justify-content: center;
+      flex-direction: column;
+      gap: 12px;
+    }
+    #lightbox.open { display: flex; }
+    #lightbox img {
+      max-width: 90vw;
+      max-height: 80vh;
+      border-radius: 10px;
+      box-shadow: 0 8px 40px rgba(0,0,0,0.5);
+    }
+    #lightbox-name {
+      color: #ddd;
+      font-size: 0.85rem;
+    }
+    #lightbox-close {
+      position: fixed;
+      top: 18px; right: 22px;
+      background: none;
+      border: none;
+      color: #fff;
+      font-size: 2rem;
+      cursor: pointer;
+      line-height: 1;
+    }
+
+    .empty { color: #999; font-size: 0.9rem; padding: 40px 0; text-align: center; }
+    .spinner {
+      border: 3px solid #e0d7f5;
+      border-top-color: #7c5cbf;
+      border-radius: 50%;
+      width: 32px; height: 32px;
+      animation: spin 0.7s linear infinite;
+      margin: 60px auto;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    .toast {
+      position: fixed;
+      bottom: 24px; left: 50%;
+      transform: translateX(-50%);
+      background: #333;
+      color: #fff;
+      padding: 10px 20px;
+      border-radius: 24px;
+      font-size: 0.85rem;
+      z-index: 2000;
+      opacity: 0;
+      transition: opacity 0.3s;
+      pointer-events: none;
+    }
+    .toast.show { opacity: 1; }
+  </style>
+</head>
+<body>
+
+<header>
+  <h1>YoIssue 이미지 관리</h1>
+  <span id="header-count">불러오는 중...</span>
+</header>
+
+<div id="toolbar">
+  <button class="btn btn-primary" onclick="loadImages()">새로고침</button>
+  <button class="btn btn-outline" onclick="loadImages(true)" title="DB 대신 Storage를 직접 탐색">Storage 재스캔</button>
+  <span id="status"></span>
+</div>
+
+<div id="content">
+  <div class="spinner" id="spinner"></div>
+</div>
+
+<!-- Lightbox -->
+<div id="lightbox" onclick="closeLightbox(event)">
+  <button id="lightbox-close" onclick="closeLightbox()">×</button>
+  <img id="lightbox-img" src="" alt="" />
+  <div id="lightbox-name"></div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script src="https://unpkg.com/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
+<script>
+  const SUPABASE_URL    = 'https://ybowseliebcyywqavnzg.supabase.co';
+  const ANON_KEY        = 'sb_publishable_YsnauQoRZbYRnxamJem2dg_9tvwwaiV';
+  const BUCKET          = 'yoissue-images';
+  const BASE_HEADERS    = { apikey: ANON_KEY, Authorization: `Bearer ${ANON_KEY}` };
+  const supabaseClient  = supabase.createClient(SUPABASE_URL, ANON_KEY);
+
+  // ── 1순위: DB에서 image_paths 조회 ────────────────────────────────────────────
+  async function loadFromDB() {
+    const { data, error } = await supabaseClient
+      .from('daily_news')
+      .select('date, image_paths')
+      .not('image_paths', 'is', null)
+      .order('date', { ascending: false });
+    if (error) throw new Error('DB 조회 오류: ' + error.message);
+    return (data || []).flatMap(row => row.image_paths || []);
+  }
+
+  // ── 2순위(fallback): Storage 재귀 탐색 ─────────────────────────────────────────
+  // 경로 구조: {date}/{charKey}/{imageType}/{emotion}/{timestamp}.png
+  async function listAllFiles(prefix = '', depth = 0) {
+    if (depth > 6) return [];
+    const res = await fetch(`${SUPABASE_URL}/storage/v1/object/list/${BUCKET}`, {
+      method: 'POST',
+      headers: { ...BASE_HEADERS, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ prefix, limit: 1000, offset: 0, sortBy: { column: 'name', order: 'asc' } }),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.message || `HTTP ${res.status}`);
+    }
+    const items = await res.json();
+
+    const files = [];
+    for (const item of (items || [])) {
+      if (!item.name) continue;
+      const fullPath = prefix ? `${prefix}${item.name}` : item.name;
+      if (item.id) {
+        if (fullPath.endsWith('.png')) files.push(fullPath);
+      } else {
+        const sub = await listAllFiles(`${fullPath}/`, depth + 1);
+        files.push(...sub);
+      }
+    }
+    return files;
+  }
+
+  // ── 이미지 목록 불러오기 ────────────────────────────────────────────────────────
+  // forceStorage=true 이면 DB를 건너뛰고 Storage 직접 탐색
+  async function loadImages(forceStorage = false) {
+    document.getElementById('content').innerHTML = '<div class="spinner"></div>';
+    document.getElementById('status').textContent = '';
+    document.getElementById('header-count').textContent = '불러오는 중...';
+
+    let files = [];
+    try {
+      if (!forceStorage) {
+        // 1순위: DB
+        files = await loadFromDB();
+        console.log('[load] DB image_paths 수:', files.length);
+      }
+
+      if (files.length === 0) {
+        // fallback: Storage 재귀 탐색
+        console.log('[load] DB 없음 → Storage 탐색');
+        document.getElementById('status').textContent = 'Storage 탐색 중...';
+        files = await listAllFiles('');
+        console.log('[load] Storage .png 파일 수:', files.length);
+        document.getElementById('status').textContent = '';
+      }
+    } catch (e) {
+      console.error('[loadImages] 오류:', e);
+      document.getElementById('content').innerHTML = `<p class="empty">불러오기 실패: ${e.message}</p>`;
+      return;
+    }
+
+    document.getElementById('header-count').textContent = `총 ${files.length}장`;
+    renderImages(files);
+  }
+
+  // ── 경로 파싱 ──────────────────────────────────────────────────────────────────
+  function parsePath(path) {
+    // {date}/{charKey}/{imageType}/{emotion}/{timestamp}.png
+    const parts = path.split('/');
+    if (parts.length !== 5) return { date: '기타', charKey: '', imageType: '', emotion: '', raw: path };
+    const [date, charKey, imageType, emotion] = parts;
+    return { date, charKey, imageType, emotion, raw: path };
+  }
+
+  // ── 렌더링 ──────────────────────────────────────────────────────────────────────
+  function renderImages(files) {
+    const groups = {};
+    for (const path of files) {
+      const { date } = parsePath(path);
+      if (!groups[date]) groups[date] = [];
+      groups[date].push(path);
+    }
+
+    const dates = Object.keys(groups).sort((a, b) => b.localeCompare(a));
+    if (dates.length === 0) {
+      document.getElementById('content').innerHTML = '<p class="empty">이미지가 없습니다.</p>';
+      return;
+    }
+
+    let html = '';
+    for (const date of dates) {
+      html += `<div class="date-group">
+        <div class="date-label">📅 ${date} <span style="font-weight:400;color:#999;font-size:0.85rem;">(${groups[date].length}장)</span></div>
+        <div class="grid">`;
+      for (const path of groups[date]) {
+        html += cardHtml(path);
+      }
+      html += `</div></div>`;
+    }
+
+    document.getElementById('content').innerHTML = html;
+  }
+
+  function cardHtml(path) {
+    const { charKey, imageType, emotion } = parsePath(path);
+    const { data } = supabaseClient.storage.from(BUCKET).getPublicUrl(path);
+    const url       = data.publicUrl;
+    const safeUrl   = escHtml(url);
+    const safePath  = escHtml(path);
+    const typeBadge = imageType ? `<span class="badge badge-${imageType}">${imageType}</span>` : '';
+    const emotBadge = emotion   ? `<span class="badge badge-${emotion}">${emotion}</span>` : '';
+    const charLabel = charKey === 'hana' ? '🌸 하나' : charKey === 'junhyuk' ? '⚡ 준혁' : charKey;
+    return `
+      <div class="card" id="card-${CSS.escape(path)}">
+        <div class="card-img-wrap" onclick="openLightbox('${safeUrl}','${safePath}')">
+          <img src="${safeUrl}" alt="${safePath}" loading="lazy" onerror="this.style.opacity=0.3" />
+        </div>
+        <div class="card-body">
+          <div class="card-name">${safePath}</div>
+          <div style="display:flex;flex-wrap:wrap;gap:4px">${typeBadge}${emotBadge}</div>
+          <div style="font-size:0.72rem;color:#888">${charLabel}</div>
+          <div class="card-actions">
+            <button class="btn-save"   onclick="saveImage('${safeUrl}','${safePath}')">⬇ 저장</button>
+            <button class="btn-delete" onclick="deleteImage('${safePath}')">🗑 삭제</button>
+          </div>
+        </div>
+      </div>`;
+  }
+
+  function escHtml(str) {
+    return str.replace(/&/g,'&amp;').replace(/'/g,'&#39;').replace(/"/g,'&quot;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  }
+
+  // ── 저장 (다운로드) ─────────────────────────────────────────────────────────────
+  async function saveImage(url, name) {
+    try {
+      const res = await fetch(url);
+      if (!res.ok) throw new Error(res.status);
+      const blob = await res.blob();
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = name.split('/').pop(); // 파일명만 추출
+      a.click();
+      URL.revokeObjectURL(a.href);
+      showToast(`저장 완료: ${name}`);
+    } catch (e) {
+      showToast(`저장 실패: ${e.message}`, true);
+    }
+  }
+
+  // ── 삭제 ────────────────────────────────────────────────────────────────────────
+  async function deleteImage(path) {
+    if (!confirm(`삭제하시겠습니까?\n\n${path}`)) return;
+    try {
+      const res = await fetch(`${SUPABASE_URL}/storage/v1/object/${BUCKET}`, {
+        method: 'DELETE',
+        headers: { ...BASE_HEADERS, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ prefixes: [path] }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.message || res.status);
+      const card = document.getElementById(`card-${CSS.escape(path)}`);
+      if (card) card.remove();
+      showToast(`삭제 완료: ${path}`);
+      document.querySelectorAll('.date-group').forEach(g => {
+        if (g.querySelector('.grid').children.length === 0) g.remove();
+      });
+      const total = document.querySelectorAll('.card').length;
+      document.getElementById('header-count').textContent = `총 ${total}장`;
+    } catch (e) {
+      showToast(`삭제 실패: ${e.message}`, true);
+    }
+  }
+
+  // ── Lightbox ────────────────────────────────────────────────────────────────────
+  function openLightbox(url, name) {
+    document.getElementById('lightbox-img').src = url;
+    document.getElementById('lightbox-name').textContent = name;
+    document.getElementById('lightbox').classList.add('open');
+  }
+  function closeLightbox(e) {
+    if (e && e.target !== document.getElementById('lightbox') && e.target !== document.getElementById('lightbox-close')) return;
+    document.getElementById('lightbox').classList.remove('open');
+    document.getElementById('lightbox-img').src = '';
+  }
+  document.addEventListener('keydown', e => { if (e.key === 'Escape') closeLightbox({ target: document.getElementById('lightbox') }); });
+
+  // ── Toast ────────────────────────────────────────────────────────────────────────
+  let toastTimer;
+  function showToast(msg, isError = false) {
+    const t = document.getElementById('toast');
+    t.textContent = msg;
+    t.style.background = isError ? '#c62828' : '#333';
+    t.classList.add('show');
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => t.classList.remove('show'), 2500);
+  }
+
+  // ── 초기 로드 ────────────────────────────────────────────────────────────────────
+  loadImages();
+</script>
+</body>
+</html>
