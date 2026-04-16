@@ -19,20 +19,25 @@
 
 'use strict';
 
+const fs   = require('fs');
+const path = require('path');
+
 const { loadEnv } = require('./loadEnv');
 loadEnv();
 
 const { createClient } = require('@supabase/supabase-js');
 const { buildComfyWorkflow } = require('./comfyUtils');
+const { interpretNews }   = require('./newsInterpreter');
+const { buildImagePrompt } = require('./promptBuilder');
 
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_KEY = process.env.SUPABASE_SERVICE_KEY;
-const OPENAI_KEY   = (process.env.OPENAI_API_KEY || '').replace(/['"]/g, '').trim();
 const SD_MODEL     = process.env.SD_MODEL_NAME || 'v1-5-pruned-emaonly.safetensors';
 
 const COMFY_URL    = 'http://localhost:8188';
 const BUCKET       = 'yoissue-images';
 const POLL_INTERVAL_MS = 5 * 60 * 1000; // 5분
+const LOCK_FILE    = path.join(__dirname, '.poll-generate.lock');
 
 const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
 
@@ -83,161 +88,7 @@ async function getTodayNews() {
   return data; // null이면 오늘 뉴스 없음
 }
 
-// ── GPT 공통 호출 헬퍼 ─────────────────────────────────────────────────────────
-async function callGPT(systemMsg, userMsg) {
-  const res = await fetch('https://api.openai.com/v1/chat/completions', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'Authorization': `Bearer ${OPENAI_KEY}`,
-    },
-    body: JSON.stringify({
-      model: 'gpt-4o-mini',
-      max_tokens: 150,
-      messages: [
-        { role: 'system', content: systemMsg },
-        { role: 'user',   content: userMsg   },
-      ],
-    }),
-  });
-  const data = await res.json();
-  if (data.error) throw new Error('GPT 오류: ' + data.error.message);
-  return data.choices[0].message.content.trim();
-}
-
-// ── 상황 프롬프트: 뉴스 장면 중심 ──────────────────────────────────────────────
-// imageType === 'situation' 전용
-// 구조: [뉴스 상황] + [장소] + [사람들 행동] + [전체 분위기] + [캐릭터는 장면의 일원]
-const SITUATION_SHOTS = [
-  {
-    label: 'wide establishing shot',
-    rule:  'Compose as a wide establishing shot — show the full environment, multiple figures spread across the frame, and the location clearly readable at a glance.',
-  },
-  {
-    label: 'medium group shot',
-    rule:  'Compose as a medium group shot — frame 3–5 people from the waist up, showing faces and interactions, with the location visible in the background.',
-  },
-  {
-    label: 'over-the-shoulder shot',
-    rule:  'Compose as an over-the-shoulder shot — the character\'s shoulder and back occupy one side of the frame, with the unfolding scene visible from their viewpoint.',
-  },
-  {
-    label: 'eye-level crowd shot',
-    rule:  'Compose at eye level from within the crowd — the character is among other people, all roughly the same scale, giving a feeling of being immersed in the scene.',
-  },
-];
-
-async function buildSituationPrompt({ category, emotion, character, newsTitle }) {
-  const shot = SITUATION_SHOTS[Math.floor(Math.random() * SITUATION_SHOTS.length)];
-
-  const atmosphereGuide =
-    emotion === 'positive' ? 'optimistic and energetic — people look relieved, celebrating, or motivated' :
-    emotion === 'negative' ? 'tense and somber — people look stressed, worried, or overwhelmed' :
-    /* worry */              'uncertain and cautious — people look anxious or unsettled';
-
-  const systemMsg = `You are an AI that writes image generation prompts for a Korean news app.
-Write a concise English prompt (under 80 words) for a webtoon/anime-style illustration.
-
-Build the prompt in this exact order:
-1. News-derived situation keyword (e.g. "military blockade", "economic downturn", "factory closure")
-2. Specific real-world location that fits the news category:
-   - 정치/politics: government building exterior, parliament steps, press briefing room, presidential residence
-   - 군사/military: naval port, warship deck, military base, operations command center, harbor with warships
-   - 국제/international: airport terminal, embassy exterior, international conference hall, border checkpoint
-   - 경제/economy: stock exchange floor, bank lobby, office building, commercial district, factory floor
-   - 사회/society: hospital corridor, school courtyard, public square, community center
-   - 문화/culture: concert venue, museum hall, cultural festival grounds
-   - 과학/science: research lab, university campus, tech conference hall
-   Pick the ONE location that best fits the news title and category.
-3. Multiple people and their visible actions that fit the location (e.g. "soldiers standing at attention", "officers monitoring screens")
-4. Overall atmosphere: ${atmosphereGuide}
-5. The character (${character}) as ONE small figure in the scene, doing a contextually fitting action
-
-Hard rules:
-- ${shot.rule}
-- FAR SHOT, ZOOMED OUT — full scene must be visible
-- Character occupies a small portion of the frame — face not dominant
-- Subject small in frame, surrounded by environment and other people
-- NEVER close-up, NEVER portrait, NEVER face-filling-the-frame
-- Soft cel-shading, clean outlines, pastel background tones
-
-Return ONLY the prompt text, nothing else.`;
-
-  const userMsg = `News: ${newsTitle}\nCategory: ${category}\nCharacter: ${character}\nEmotion: ${emotion}`;
-  const generatedPrompt = await callGPT(systemMsg, userMsg);
-  const triggerWord    = character === '하나' ? 'hana' : 'junhyuk';
-  const qualityPrefix  = `(masterpiece:1.2), (best quality:1.2), highly detailed, far shot, zoomed out, subject small in frame, full scene visible, ${shot.label}, multiple people, scene-focused, soft cel-shading, `;
-  return `${qualityPrefix}${triggerWord}, ${generatedPrompt}`;
-}
-
-// ── 감정(after) 프롬프트: 캐릭터 감정 공감 중심 ────────────────────────────────
-// imageType === 'after' 전용
-// 구조: [캐릭터] + [감정 상태] + [행동] + [간단한 배경]
-//
-// 감정별 설계 원칙:
-//   positive → 안정된 정지 상태 (relaxed posture, gentle smile)
-//   negative → 이미 끝난 상태  (exhausted, emotionally drained, no more energy)
-//   unsure   → 모르겠음/회피    (avoidant, blank stare, detached — 판단 보류)
-
-const AFTER_EMOTION_PROFILES = {
-  positive: {
-    state:      'relaxed and settled — gentle smile, soft eyes, upright but comfortable posture',
-    actions:    'sitting quietly with a warm drink, leaning back with hands resting, or gazing out a window with a calm expression',
-    background: 'bright and cozy — sunlit room, warm cafe, or soft afternoon light',
-    shotHint:   'full body visible — far enough to see the entire figure and surrounding space, face NOT dominant',
-  },
-  negative: {
-    state:      'exhausted and emotionally drained — eyes downcast, slumped shoulders, no energy left to react',
-    actions:    'slumped on a chair staring at nothing, lying on a bed fully clothed, or sitting on the floor with back against the wall',
-    background: 'dim and quiet — dark room with a single lamp, empty hallway, or late-night desk',
-    shotHint:   'full body visible — far enough to see collapsed posture and surrounding space, face NOT dominant',
-  },
-  unsure: {
-    state:      'emotionally detached and avoidant — blank expression, neither upset nor happy, deliberately not engaging with the topic',
-    actions:    'looking away from the screen, scrolling aimlessly without reading, or sitting with arms crossed staring into empty space',
-    background: 'neutral and unremarkable — plain room, ordinary desk, or featureless background that offers no distraction',
-    shotHint:   'full body visible — far enough to see the avoidant posture and surrounding space, face NOT dominant',
-  },
-};
-
-async function buildAfterPrompt({ emotion, character, newsTitle }) {
-  const profile = AFTER_EMOTION_PROFILES[emotion] || AFTER_EMOTION_PROFILES.unsure;
-
-  const systemMsg = `You are an AI that writes image generation prompts for a Korean news app.
-Write a concise English prompt (under 80 words) for a webtoon/anime-style illustration.
-
-Build the prompt in this exact order:
-1. The character (${character}) as the sole subject
-2. Emotional state: ${profile.state}
-3. Specific action: choose ONE from — ${profile.actions}
-4. Background: ${profile.background}
-
-Hard rules:
-- ${profile.shotHint}
-- FAR SHOT, ZOOMED OUT — full body and surrounding space must be visible
-- Character occupies a small portion of the frame — face not dominant
-- Emotion readable from body language and posture, NOT from facial close-up
-- ONE character only — NO multiple people
-- NEVER close-up, NEVER portrait, NEVER face-filling-the-frame
-- Soft cel-shading, clean outlines, pastel tones
-
-Return ONLY the prompt text, nothing else.`;
-
-  const userMsg = `Character: ${character}\nEmotion: ${emotion}\nNews context: ${newsTitle}`;
-  const generatedPrompt = await callGPT(systemMsg, userMsg);
-  const triggerWord    = character === '하나' ? 'hana' : 'junhyuk';
-  const qualityPrefix  = '(masterpiece:1.2), (best quality:1.2), highly detailed, far shot, zoomed out, full body visible, subject small in frame, face not dominant, single character, emotion-focused, soft cel-shading, ';
-  return `${qualityPrefix}${triggerWord}, ${generatedPrompt}`;
-}
-
-// ── 이미지 타입에 따라 적절한 프롬프트 함수 호출 ────────────────────────────────
-async function buildImagePrompt({ category, emotion, character, imageType, newsTitle }) {
-  if (imageType === 'situation') {
-    return buildSituationPrompt({ category, emotion, character, newsTitle });
-  } else {
-    return buildAfterPrompt({ emotion, character, newsTitle });
-  }
-}
+// interpretNews, buildImagePrompt → ./newsInterpreter
 
 // ── ComfyUI: /history 폴링 ──────────────────────────────────────────────────────
 async function pollComfyHistory(promptId, maxWaitMs = 180000) {
@@ -261,17 +112,17 @@ async function pollComfyHistory(promptId, maxWaitMs = 180000) {
 }
 
 // ── 단일 이미지 생성 + 업로드 ──────────────────────────────────────────────────
-async function generateAndUpload({ date, category, newsTitle, combo }) {
+async function generateAndUpload({ date, newsTitle, combo, interpretation }) {
   const label = `${combo.charKey}_${combo.imageType}_${combo.emotion}`;
-  console.log(`  [GEN]  ${label}`);
+  console.log(`🖼️ 이미지 생성 호출됨: ${label} @ ${new Date().toISOString()}`);
 
-  // 2. GPT로 프롬프트 생성
-  const imagePrompt = await buildImagePrompt({
-    category,
+  // 2. 프롬프트 생성
+  const imagePrompt = buildImagePrompt({
     emotion:   combo.emotion,
     character: combo.character,
     imageType: combo.imageType,
     newsTitle,
+    interpretation,
   });
   console.log(`         prompt: ${imagePrompt.slice(0, 60)}...`);
 
@@ -308,7 +159,15 @@ async function generateAndUpload({ date, category, newsTitle, combo }) {
 }
 
 // ── 메인 폴 루프 ────────────────────────────────────────────────────────────────
+let isRunning = false;
+
 async function runOnce() {
+  if (isRunning) {
+    console.log('  ⏳ 이전 실행 진행 중 — 스킵');
+    return;
+  }
+  isRunning = true;
+  try {
   const date = today();
   console.log(`\n[${new Date().toLocaleTimeString('ko-KR')}] 폴링 시작 — ${date}`);
 
@@ -328,54 +187,89 @@ async function runOnce() {
 
   console.log(`  뉴스: [${news.category}] ${news.title.slice(0, 40)}...`);
 
-  // 2. 오늘 이미지 이미 생성됐는지 확인
-  const { data: existing } = await supabase
-    .from('daily_news')
-    .select('image_paths')
-    .eq('date', date)
-    .maybeSingle();
-
-  if (existing?.image_paths?.length >= IMAGE_COMBOS.length) {
-    console.log(`  이미지 이미 생성됨 (${existing.image_paths.length}장) — 스킵`);
+  // 2. 뉴스 장면 해석 (GPT 1회 — situation 이미지 전체에서 공유)
+  let interpretation;
+  try {
+    interpretation = await interpretNews({ category: news.category, newsTitle: news.title });
+    console.log(`  해석 완료: ${interpretation.event_core}`);
+  } catch (e) {
+    console.error('  interpretNews 실패:', e.message);
     return;
   }
 
-  // 3. 각 조합에 대해 이미지 생성/업로드
+  // 3. 각 조합에 대해 Storage 직접 확인 후 생성/스킵
+  console.log(`📊 이미지 생성 시작 — 총 ${IMAGE_COMBOS.length}개 조합`);
   const results = [];
+  let count = 0;
   for (const combo of IMAGE_COMBOS) {
+    count++;
+    const label = `${combo.charKey}_${combo.imageType}_${combo.emotion}`;
+    const folder = `${date}/${combo.charKey}/${combo.imageType}/${combo.emotion}`;
+
+    // Storage에서 직접 존재 여부 확인 (DB 컬럼 의존 안 함)
+    const { data: storageFiles } = await supabase.storage.from(BUCKET).list(folder);
+    if (storageFiles && storageFiles.length > 0) {
+      console.log(`📊 ${count}/${IMAGE_COMBOS.length} ✅ 스킵: ${label} (Storage에 존재)`);
+      results.push({ label, status: 'skipped', filePath: `${folder}/${storageFiles[0].name}` });
+      continue;
+    }
+
+    console.log(`📊 ${count}/${IMAGE_COMBOS.length} 생성: ${label}`);
     try {
       const result = await generateAndUpload({
         date,
-        category:  news.category,
         newsTitle: news.title,
         combo,
+        interpretation,
       });
       results.push(result);
     } catch (e) {
-      const label = `${combo.charKey}_${combo.emotion}`;
       console.error(`  [ERR]  ${label}: ${e.message}`);
       results.push({ label, status: 'error', error: e.message });
     }
   }
 
-  // 3. 결과 요약
+  // 결과 요약
   const generated = results.filter(r => r.status === 'generated').length;
   const skipped   = results.filter(r => r.status === 'skipped').length;
   const errors    = results.filter(r => r.status === 'error').length;
   console.log(`  완료 — 생성: ${generated}개 / 스킵: ${skipped}개 / 오류: ${errors}개`);
 
-  // 4. 생성된 image_path 목록을 daily_news에 저장
-  const imagePaths = results.filter(r => r.status === 'generated' && r.filePath).map(r => r.filePath);
-  if (imagePaths.length > 0) {
+  // image_paths 업데이트 (앱에서 읽기 위해 — 스킵된 것 포함 전체)
+  const allPaths = results.filter(r => r.filePath).map(r => r.filePath);
+  if (allPaths.length > 0) {
     const { error: updateError } = await supabase.from('daily_news')
-      .update({ image_paths: imagePaths })
+      .update({ image_paths: allPaths })
       .eq('date', date);
     if (updateError) console.error('  image_paths 저장 실패:', updateError.message);
-    else console.log(`  image_paths 저장 완료 (${imagePaths.length}개)`);
+    else console.log(`  image_paths 저장 완료 (총 ${allPaths.length}개)`);
+  }
+  } finally {
+    isRunning = false;
   }
 }
 
 async function main() {
+  // ── 프로세스 중복 실행 방지 ────────────────────────────────────────────────────
+  if (fs.existsSync(LOCK_FILE)) {
+    const pid = parseInt(fs.readFileSync(LOCK_FILE, 'utf8').trim(), 10);
+    let alive = false;
+    try { process.kill(pid, 0); alive = true; } catch {}
+    if (alive) {
+      console.error(`⛔ 이미 실행 중인 인스턴스가 있습니다 (PID: ${pid})`);
+      console.error(`   종료하려면: taskkill /F /PID ${pid}`);
+      process.exit(1);
+    } else {
+      console.log(`⚠️  이전 락 파일 발견 (PID: ${pid} — 이미 종료됨). 락 파일 삭제 후 계속.`);
+      fs.unlinkSync(LOCK_FILE);
+    }
+  }
+  fs.writeFileSync(LOCK_FILE, String(process.pid));
+  const cleanupLock = () => { try { fs.unlinkSync(LOCK_FILE); } catch {} };
+  process.on('exit', cleanupLock);
+  process.on('SIGINT',  () => { cleanupLock(); process.exit(0); });
+  process.on('SIGTERM', () => { cleanupLock(); process.exit(0); });
+
   console.log('=== poll-and-generate 시작 ===');
   console.log(`  ComfyUI: ${COMFY_URL}`);
   console.log(`  Supabase 버킷: ${BUCKET}`);

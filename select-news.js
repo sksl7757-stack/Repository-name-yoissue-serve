@@ -7,6 +7,8 @@ const { combineScore, resolveWeights } = require('./combineScore');
 
 loadEnv();
 
+console.log('🔥 select-news 모듈 로드됨:', new Date().toISOString());
+
 // 헤더 값에 비ASCII 문자가 포함되면 fetch ByteString 오류 발생 → 제거
 const NAVER_ID = (process.env.NAVER_CLIENT_ID || '').replace(/[^\x20-\x7E]/g, '');
 const NAVER_SECRET = (process.env.NAVER_CLIENT_SECRET || '').replace(/[^\x20-\x7E]/g, '');
@@ -261,6 +263,7 @@ function pickBestNews(newsList, analysis) {
 }
 
 async function main() {
+  console.log('🚀 main() 시작:', new Date().toISOString());
   console.log('[뉴스 선정 시작]', new Date().toLocaleString('ko-KR'));
 
   if (!NAVER_ID || !NAVER_SECRET) {
@@ -392,3 +395,7 @@ async function main() {
 }
 
 module.exports = { main };
+
+if (require.main === module) {
+  main().catch(e => { console.error(e); process.exit(1); });
+}

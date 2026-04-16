@@ -1,7 +1,21 @@
 // comfyUtils.js — ComfyUI 공통 유틸
+
+const NEGATIVE_PROMPT = `
+text, letters, words, numbers, typography, caption, subtitle,
+watermark, logo, UI text, interface text, signage, readable text,
+
+nsfw, cleavage, exposed skin, exposed thighs, short skirt, miniskirt,
+suggestive pose, sexualized, erotic,
+
+duplicate characters, multiple faces, cloned person, same person twice,
+
+bad anatomy, deformed body, extra limbs, distorted face,
+
+(worst quality:1.4), (low quality:1.4), blurry, pixelated, artifacts
+`;
+
 function buildComfyWorkflow(positivePrompt, modelName, loraName) {
   const ckpt = modelName || process.env.SD_MODEL_NAME || 'meinamix_v12Final.safetensors';
-  const negativePrompt = '(worst quality:1.4), (low quality:1.4), ugly, blurry, watermark, text, deformed, extra limbs, bad anatomy, bad eyes, monochrome, grayscale, sepia, (close-up:1.4), (closeup:1.4), (portrait:1.3), face shot, headshot, bust shot, extreme close-up, face filling frame, (face dominant:1.3), bad face, ugly face, distorted face, deformed face, extra faces, (multiple faces:1.2)';
   const seed = Math.floor(Math.random() * 2 ** 32);
 
   // loraName이 없으면 체크포인트 → KSampler 직접 연결 (LoRA 노드 생략)
@@ -17,7 +31,7 @@ function buildComfyWorkflow(positivePrompt, modelName, loraName) {
       },
       '4': {
         class_type: 'CLIPTextEncode',
-        inputs: { text: negativePrompt, clip: ['1', 1] },
+        inputs: { text: NEGATIVE_PROMPT, clip: ['1', 1] },
       },
       '5': {
         class_type: 'EmptyLatentImage',
@@ -61,7 +75,7 @@ function buildComfyWorkflow(positivePrompt, modelName, loraName) {
         model: ['1', 0],
         clip:  ['1', 1],
         lora_name:      loraName,
-        strength_model: 0.5,
+        strength_model: 0.8,
         strength_clip:  0.5,
       },
     },
@@ -71,7 +85,7 @@ function buildComfyWorkflow(positivePrompt, modelName, loraName) {
     },
     '4': {
       class_type: 'CLIPTextEncode',
-      inputs: { text: negativePrompt, clip: ['2', 1] },
+      inputs: { text: NEGATIVE_PROMPT, clip: ['2', 1] },
     },
     '5': {
       class_type: 'EmptyLatentImage',
