@@ -22,6 +22,7 @@ async function callGPT(systemMsg, userMsg, maxTokens = 150) {
     body: JSON.stringify({
       model: 'gpt-4o-mini',
       max_tokens: maxTokens,
+      response_format: { type: 'json_object' },
       messages: [
         { role: 'system', content: systemMsg },
         { role: 'user',   content: userMsg   },
@@ -45,103 +46,158 @@ function safeJsonParse(raw) {
 }
 
 // ── News Interpreter Agent ────────────────────────────────────────────────────
-async function interpretNews({ category, newsTitle }) {
-  const systemMsg = `You are a visual news interpreter for an image generation system.
+async function interpretNews({ category, newsTitle, newsSummary = '' }) {
+  const systemMsg = `You are a visual scene generator for FLUX image generation model.
+Convert a news headline into 9 drawable visual fields.
 
-Your job is to convert a news headline into a SPECIFIC VISUAL SCENE.
+PRIORITY RULES (in strict order):
 
-CRITICAL RULES:
-- The scene MUST be directly based on the headline
-- DO NOT create a generic category-based scene
-- Focus on what is physically happening right now
-- Show clear human actions (not abstract concepts)
-- The scene must be something that can be directly illustrated in a single frame
+1. CATEGORY MOOD (mandatory - cannot be changed)
+   Every scene MUST carry the visual mood of its category.
+   - IT → tech office feel, monitors, code screens, blue-tone lighting, developer workspace
+   - Finance → financial workplace feel, charts, market data, trading atmosphere
+   - Politics → political setting feel, formal atmosphere, official scenery
+   - Real estate → property-related feel, interiors, contracts, keys
+   - Health → clinical/medical feel, sterile environment
+   - Culture → artistic feel, creative spaces
+   - Environment → nature or industrial impact feel
+   - International → global/foreign feel
+   - Social → everyday life feel
+
+2. NEWS DETAILS (only visually drawable elements)
+   Extract key concepts from the news and translate them into VISUAL SYMBOLS.
+   - NEVER include text/letters/document content (AI cannot render readable text)
+   - Convert abstract concepts into concrete visual symbols:
+     * "AI" → glowing neural network visualization, digital brain graphics
+     * "quantum security" → complex circuit boards, lock icons on screens
+     * "stock crash" → red downward graphs, falling arrows
+     * "launch cancelled" → dimmed presentation screen, closed curtain
+     * "hacking" → warning red alerts, broken lock symbol
+
+3. ACTIONS
+   Describe what people are physically doing in this mood + context.
 
 OUTPUT FORMAT (JSON ONLY):
 
 {
-  "event_core": "...",
-  "visual_key": "...",
+  "news_core": "...",
+  "is_mourning_required": true_or_false,
   "location": "...",
   "actors": "...",
-  "negative_scene": {
-    "actions": "...",
-    "details": "..."
-  },
-  "positive_scene": {
-    "actions": "...",
-    "details": "..."
-  },
-  "outcome": {
-    "positive": "...",
-    "negative": "...",
-    "unsure": "..."
-  },
-  "after_reactions": {
-    "positive": {
-      "action": "...",
-      "context": "..."
-    },
-    "negative": {
-      "action": "...",
-      "context": "..."
-    },
-    "unsure": {
-      "action": "...",
-      "context": "..."
-    }
-  }
+  "props": "...",
+  "positive_view": "...",
+  "negative_view": "...",
+  "after_positive": "...",
+  "after_negative": "...",
+  "after_unsure": "..."
 }
 
-GUIDELINES:
-- negative_scene = problem unfolding
-- positive_scene = recovery, adaptation, or partial improvement
-- BOTH must come from the SAME event
+---
 
-FIELD: visual_key
-- A SINGLE visual element that MUST appear in the image
-- Represents the core of the news visually
-- GOOD: "stock index chart breaking above resistance", "crowded job fair line"
-- BAD: abstract concepts, non-drawable ideas
-- Must be specific and drawable
+FIELD DEFINITIONS:
 
-FIELD: outcome
-- The REAL-WORLD CONSEQUENCE of the news — NOT emotion, NOT reaction
-- What materially changed in someone's life because of this event
-- GOOD: "increased personal wealth", "financial loss", "missed investment opportunity"
-- BAD: "felt happy", "was stressed"
+news_core — one-sentence summary of the news event
 
-AFTER RULES (CRITICAL):
-- AFTER must be based on OUTCOME, not just emotion
-- Show how a person's life changes because of the event
-- The scene must depict a RESULT of the news, not just reacting to it
+is_mourning_required — boolean
+Answer: "Would generating a positive/celebratory image of this news hurt victims, families, or survivors?"
+- true: news about deaths, disasters, accidents, tragedies, memorials, terror attacks, mass casualties, mourning events
+- false: political news, economic news, business news, normal events
+Examples:
+  "세월호 참사 12주기" → true
+  "이태원 참사 추모식" → true
+  "교통사고 사망자 5명" → true
+  "대학교수 별세" → true
+  "독재자 사망" → false
+  "연쇄살인범 검거" → false
+  "삼성전자 주가 폭락" → false
+  "대통령 탄핵 가결" → false
+GOOD: "KOSPI index broke above 6200 for the first time after Iran war fears eased"
 
-FIELD: after_reactions.action
-- MUST be a concrete, visible, physical behavior
-- Must involve interaction with objects or environment
-- GOOD: "counting money on a desk", "checking bank account on a phone", "packing luggage for a trip"
-- BAD: "thinking", "looking at a screen", "reacting emotionally", "sitting and thinking"
+location — brief background setting (subordinate to action)
+- Keep it simple, just 1-3 words
+- The scene is about ACTIONS, not the place
+GOOD: "modern office interior", "meeting room", "home office"
+BAD: "stock exchange trading floor with detailed monitors and bustling crowd"
 
-FIELD: after_reactions.context
-- Must show the RESULT environment — not just where, but what changed
-- GOOD: "desk covered with cash and financial documents", "luxury hotel room after successful investment"
-- BAD: "office", "room", vague locations
+actors — people physically present in the scene
+GOOD: "suited traders at monitors", "hard-hatted construction workers", "protesters holding signs"
+BAD: "investors", "people", "the public"
 
-EMOTION DEFINITIONS:
-- positive: outcome was beneficial — life improved
-- negative: outcome was harmful — life got harder
-- unsure: outcome is unclear — person is waiting or avoiding
+props — 3-5 physical objects that reinforce the event (NOT people, NOT location)
+GOOD: "scattered financial papers, flashing red ticker boards, overturned coffee cups"
+BAD: "nice office", "modern building", "busy environment"
 
-IMPORTANT:
-- AFTER scenes must show CONSEQUENCE, not reaction
-- Every AFTER image should answer: "What happened to this person because of this news?"
-- Positive MUST still be realistic (no exaggerated wealth or fantasy)
-- ALL fields must be in English
+positive_view — visual interpretation of this news scene with a POSITIVE tone
+- Visualize the news EVENT itself, not a person reading news
+- Interpret the event in a positive/hopeful light
+- Follow the 3 priority rules (category mood > news visual symbols > actions)
+- Don't fix the scene scope - let the news content guide whether it's one person or many, on-site or elsewhere
 
-Return ONLY JSON.`;
+STRUCTURE:
+[category mood] + [visual symbols representing news content] + [DRAMATIC actions - intense body language like celebrating loudly, rushing with excitement, bursts of reactions - NOT just "discussing" or "looking"] + [bright/hopeful atmosphere with heightened energy]
 
-  const userMsg = `Category: ${category}\nNews: ${newsTitle}`;
-  const raw = await callGPT(systemMsg, userMsg, 400);
+ADDITIONAL RULE: Avoid passive verbs like "watching", "looking at", "discussing", "brainstorming". Use intense action verbs like "shouting", "rushing", "grabbing", "pointing excitedly", "leaping up".
+
+BAD: "person feeling happy", "people celebrating"
+
+negative_view — visual interpretation of this news scene with a NEGATIVE tone
+- Visualize the news EVENT itself, not a person reading news
+- Interpret the event in a negative/concerning light
+- Follow the 3 priority rules (category mood > news visual symbols > actions)
+- Don't fix the scene scope - let the news content guide whether it's one person or many, on-site or elsewhere
+- Must be visually OPPOSITE to positive_view
+
+STRUCTURE:
+[category mood] + [visual symbols representing news content] + [DRAMATIC actions - intense body language like gripping head, slamming desk, stepping back in shock, frozen in disbelief - NOT just "worried" or "concerned"] + [dim/heavy atmosphere with heightened tension]
+
+ADDITIONAL RULE: Avoid passive verbs like "watching", "glancing", "discussing", "reviewing". Use intense action verbs like "slamming", "gripping", "clutching", "staggering", "freezing".
+
+BAD: "person feeling sad", "people looking worried"
+
+after_positive — the MAIN CHARACTER's personal experience as a positive impact from this news
+- The character is the center of the scene
+- Show how this news positively affected the character's personal life
+- Keep the CATEGORY MOOD in the background/props
+- Location and scene can be flexible (cafe, workspace, event, travel, home, etc.)
+- MUST include: character action + related props + category mood elements + bright atmosphere
+- Use DRAMATIC actions, not passive ones
+- Show intense emotion through body language
+
+after_negative — the MAIN CHARACTER's personal experience as a negative impact from this news
+- The character is the center of the scene
+- Show how this news negatively affected the character's personal life
+- Keep the CATEGORY MOOD in the background/props
+- Location and scene can be flexible
+- MUST include: character action + related props + category mood elements + dim atmosphere
+- Use DRAMATIC actions, not passive ones
+- Show intense emotion through body language
+
+after_unsure — person completely DISCONNECTED from the news topic
+- NOT anxious, NOT worried, NOT nervous — mentally fully escaped
+- ZERO visual connection to the news topic
+- IGNORE the category mood for this field (escape scene must have ZERO connection to the news topic or category)
+- Choose scenarios completely unrelated to the news category
+- MUST include ALL 4 elements: action + central object + supporting elements + atmosphere
+- Choose from a WIDE variety of escape scenarios — do NOT always pick gaming or sleeping
+
+ESCAPE SCENARIO EXAMPLES (pick the most visually interesting, vary each time):
+GOOD gaming: "slouched on couch gripping game controller, eyes locked on glowing TV screen, takeout containers and snack wrappers on coffee table, phone face-down ignored, dim living room with console light blinking"
+GOOD sleeping: "buried under thick blanket in dark bedroom, only tuft of hair visible, phone face-down on nightstand, curtains drawn, alarm clock showing afternoon time, completely shut off from world"
+GOOD cooking: "standing at kitchen counter intensely following recipe on tablet, chopping vegetables, flour dusted on hands, multiple pots on stove, warm kitchen lighting, completely absorbed in cooking"
+GOOD reading: "curled in armchair with thick novel open, hot mug of tea steaming on side table, cat asleep on lap, warm reading lamp, rain visible through window behind, cozy quiet room"
+GOOD workout: "doing intense home workout on yoga mat, dumbbells and resistance bands around, sweat visible, fitness app on phone screen, energetic bright room, earbuds in"
+GOOD bath: "soaking in bathtub full of bubbles, eyes closed, candles on tub edge, rubber duck floating, bathroom foggy with steam, completely relaxed and isolated"
+GOOD art: "hunched over desk drawing in sketchbook, colored pencils scattered, reference photos pinned to board, desk lamp focused on paper, quiet creative space, phone out of reach"
+GOOD music: "sitting cross-legged on floor with headphones on, eyes closed, vinyl record spinning on turntable beside, album covers spread around, soft warm light, fully immersed in sound"
+GOOD pet: "sitting on floor playing with cat using feather toy, laughing expression, cat toys scattered around, cozy home corner, soft afternoon light through window"
+GOOD movie: "under blanket on couch watching TV, popcorn bowl on lap, streaming interface visible on screen, dim room with TV as only light source, fully absorbed"
+
+---
+
+ALL fields must be in English. Return ONLY JSON.`;
+
+  const userMsg = `Category: ${category}\nNews: ${newsTitle}${newsSummary ? `\nDetail: ${newsSummary}` : ''}`;
+  const raw = await callGPT(systemMsg, userMsg, 1500);
   return safeJsonParse(raw);
 }
 

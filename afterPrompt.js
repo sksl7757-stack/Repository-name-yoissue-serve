@@ -7,45 +7,22 @@ const { getTriggerWord } = require('./services/characterMap');
 // interpretation: interpretNews() 반환값
 function buildAfterPrompt({ emotion, character, interpretation }) {
 
-  const reactions = interpretation.after_reactions || {};
-  const outcomes  = interpretation.outcome || {};
-
-  const reaction =
-    reactions[emotion] ||
-    reactions.unsure ||
-    reactions.negative || {
-      action:  'sitting quietly',
-      context: 'in a plain room',
-    };
-
-  const outcome = outcomes[emotion] || outcomes.unsure || interpretation.event_core;
+  const anchor = {
+    positive: interpretation.after_positive,
+    negative: interpretation.after_negative,
+    unsure:   interpretation.after_unsure,
+  }[emotion] || interpretation.after_unsure;
 
   const triggerWord = getTriggerWord(character);
 
   return `
-main personal action: ${reaction.action},
-clear physical behavior, visible interaction with objects or environment,
+anime style, cinematic composition, dramatic lighting, expressive atmosphere,
 
-consequence of the news: ${outcome},
+${anchor},
 
-location: ${reaction.context},
+${triggerWord} ${emotion === 'positive' ? 'with satisfied expression, enjoying the moment' : emotion === 'negative' ? 'with distressed expression, absorbed in the situation' : 'looking disengaged, detached from reality'},
 
-quiet environment, private setting, no crowd, no group activity,
-
-news consequence visible through environment: ${interpretation.visual_key || interpretation.event_core},
-
-one girl only, solo, single character, no duplicate characters,
-
-${triggerWord} as the only subject, centered in the frame,
-
-medium shot, clean composition,
-character clearly visible and dominant in the scene,
-
-natural posture, calm or subtle emotional expression,
-
-professional outfit, modest clothing,
-
-soft cel-shading, clean lines
+medium shot, scene dominates composition
 `;
 }
 

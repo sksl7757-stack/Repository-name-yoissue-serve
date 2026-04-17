@@ -1,3 +1,7 @@
 node_modules
 .vercel
 .env*
+.generated-state.json
+.poll-generate.lock
+news-history.json
+lora-training/

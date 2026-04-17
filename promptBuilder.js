@@ -19,8 +19,14 @@ function buildImagePrompt({ emotion, character, imageType, interpretation }) {
   }
 
   // ── 2. interpretation structure validation ───────────────────
-  if (!interpretation.positive_scene || !interpretation.after_reactions) {
-    throw new Error('buildImagePrompt: invalid interpretation structure');
+  if (
+    !interpretation.positive_view ||
+    !interpretation.negative_view ||
+    !interpretation.after_positive ||
+    !interpretation.after_negative ||
+    !interpretation.after_unsure
+  ) {
+    throw new Error('invalid interpretation (9-field schema)');
   }
 
   // ── 3. emotion validation (strict) ───────────────────────────

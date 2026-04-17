@@ -7,40 +7,24 @@ const { getTriggerWord } = require('./services/characterMap');
 // interpretation: interpretNews() 반환값
 function buildSituationPrompt({ emotion, character, interpretation }) {
 
-  const scene =
-    emotion === 'positive'
-      ? interpretation.positive_scene
-      : interpretation.negative_scene;
+  const scene = emotion === 'positive'
+    ? interpretation.positive_view
+    : interpretation.negative_view;
 
   const triggerWord = getTriggerWord(character);
 
   return `
-${interpretation.visual_key},
+anime style, cinematic composition, dramatic lighting, expressive atmosphere,
 
-main action: ${scene.actions},
-clear visible reaction happening in the scene,
+${scene},
 
-people reacting clearly (celebrating, cheering, panicking, or discussing),
+${triggerWord} blending into the scene as part of the event, standing out with clear presence, ${emotion === 'positive' ? 'confident posture with slight smile' : 'tense posture with serious expression'},
 
-location: ${interpretation.location},
+${interpretation.props},
 
-crowd activity: ${interpretation.actors},
-busy environment, multiple people, active scene,
+${emotion === 'positive' ? 'bright lighting, energetic atmosphere' : 'dim lighting, heavy atmosphere'},
 
-visual details: ${scene.details},
-financial charts and market movement visible on screens,
-
-one girl only, no duplicate characters, only one main character,
-
-${triggerWord} present as part of the scene, not the focus,
-blending naturally into the environment,
-
-medium shot, balanced composition,
-character clearly visible but not dominating the frame,
-
-professional outfit, modest clothing, natural posture,
-
-soft cel-shading, clean lines
+wide shot, full scene visible, character clearly visible within the scene
 `;
 }
 

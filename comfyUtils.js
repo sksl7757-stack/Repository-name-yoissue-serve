@@ -1,118 +1,76 @@
-// comfyUtils.js — ComfyUI 공통 유틸
+// comfyUtils.js — ComfyUI 공통 유틸 (FLUX.1-dev)
 
-const NEGATIVE_PROMPT = `
-text, letters, words, numbers, typography, caption, subtitle,
-watermark, logo, UI text, interface text, signage, readable text,
-
-nsfw, cleavage, exposed skin, exposed thighs, short skirt, miniskirt,
-suggestive pose, sexualized, erotic,
-
-duplicate characters, multiple faces, cloned person, same person twice,
-
-bad anatomy, deformed body, extra limbs, distorted face,
-
-(worst quality:1.4), (low quality:1.4), blurry, pixelated, artifacts
-`;
-
-function buildComfyWorkflow(positivePrompt, modelName, loraName) {
-  const ckpt = modelName || process.env.SD_MODEL_NAME || 'meinamix_v12Final.safetensors';
+function buildComfyWorkflow(positivePrompt) {
   const seed = Math.floor(Math.random() * 2 ** 32);
 
-  // loraName이 없으면 체크포인트 → KSampler 직접 연결 (LoRA 노드 생략)
-  if (!loraName) {
-    return {
-      '1': {
-        class_type: 'CheckpointLoaderSimple',
-        inputs: { ckpt_name: ckpt },
-      },
-      '3': {
-        class_type: 'CLIPTextEncode',
-        inputs: { text: positivePrompt, clip: ['1', 1] },
-      },
-      '4': {
-        class_type: 'CLIPTextEncode',
-        inputs: { text: NEGATIVE_PROMPT, clip: ['1', 1] },
-      },
-      '5': {
-        class_type: 'EmptyLatentImage',
-        inputs: { width: 512, height: 512, batch_size: 1 },
-      },
-      '6': {
-        class_type: 'KSampler',
-        inputs: {
-          model:        ['1', 0],
-          positive:     ['3', 0],
-          negative:     ['4', 0],
-          latent_image: ['5', 0],
-          seed,
-          steps:        30,
-          cfg:          9,
-          sampler_name: 'euler',
-          scheduler:    'normal',
-          denoise:      1.0,
-        },
-      },
-      '7': {
-        class_type: 'VAEDecode',
-        inputs: { samples: ['6', 0], vae: ['1', 2] },
-      },
-      '8': {
-        class_type: 'SaveImage',
-        inputs: { images: ['7', 0], filename_prefix: 'yoissue' },
-      },
-    };
-  }
-
-  // loraName이 있으면 LoRA 로더 포함
   return {
+    // ── UNet 로드 (FLUX) ───────────────────────────────────
     '1': {
-      class_type: 'CheckpointLoaderSimple',
-      inputs: { ckpt_name: ckpt },
-    },
-    '2': {
-      class_type: 'LoraLoader',
+      class_type: 'UNETLoader',
       inputs: {
-        model: ['1', 0],
-        clip:  ['1', 1],
-        lora_name:      loraName,
-        strength_model: 0.8,
-        strength_clip:  0.5,
+        unet_name:    'flux1-dev.safetensors',
+        weight_dtype: 'default',
       },
     },
-    '3': {
-      class_type: 'CLIPTextEncode',
-      inputs: { text: positivePrompt, clip: ['2', 1] },
+    // ── CLIP 2개 로드 ──────────────────────────────────────
+    '2': {
+      class_type: 'DualCLIPLoader',
+      inputs: {
+        clip_name1: 't5xxl_fp8_e4m3fn.safetensors',
+        clip_name2: 'clip_l.safetensors',
+        type:       'flux',
+      },
     },
+    // ── VAE 로드 ───────────────────────────────────────────
+    '3': {
+      class_type: 'VAELoader',
+      inputs: { vae_name: 'ae.safetensors' },
+    },
+    // ── Positive 프롬프트 ──────────────────────────────────
     '4': {
       class_type: 'CLIPTextEncode',
-      inputs: { text: NEGATIVE_PROMPT, clip: ['2', 1] },
+      inputs: { text: positivePrompt, clip: ['2', 0] },
     },
+    // ── Empty 프롬프트 (FLUX는 negative 미사용) ────────────
     '5': {
-      class_type: 'EmptyLatentImage',
-      inputs: { width: 512, height: 512, batch_size: 1 },
+      class_type: 'CLIPTextEncode',
+      inputs: { text: '', clip: ['2', 0] },
     },
+    // ── FLUX Guidance ──────────────────────────────────────
     '6': {
+      class_type: 'FluxGuidance',
+      inputs: { conditioning: ['4', 0], guidance: 3.5 },
+    },
+    // ── 1024×1024 Latent ───────────────────────────────────
+    '7': {
+      class_type: 'EmptyLatentImage',
+      inputs: { width: 1024, height: 1024, batch_size: 1 },
+    },
+    // ── KSampler (FLUX 권장 설정) ──────────────────────────
+    '8': {
       class_type: 'KSampler',
       inputs: {
-        model:        ['2', 0],
-        positive:     ['3', 0],
-        negative:     ['4', 0],
-        latent_image: ['5', 0],
+        model:        ['1', 0],
+        positive:     ['6', 0],
+        negative:     ['5', 0],
+        latent_image: ['7', 0],
         seed,
-        steps:        30,
-        cfg:          9,
+        steps:        20,
+        cfg:          1.0,
         sampler_name: 'euler',
-        scheduler:    'normal',
+        scheduler:    'simple',
         denoise:      1.0,
       },
     },
-    '7': {
+    // ── VAE Decode ─────────────────────────────────────────
+    '9': {
       class_type: 'VAEDecode',
-      inputs: { samples: ['6', 0], vae: ['1', 2] },
+      inputs: { samples: ['8', 0], vae: ['3', 0] },
     },
-    '8': {
+    // ── 저장 ───────────────────────────────────────────────
+    '10': {
       class_type: 'SaveImage',
-      inputs: { images: ['7', 0], filename_prefix: 'yoissue' },
+      inputs: { images: ['9', 0], filename_prefix: 'yoissue' },
     },
   };
 }

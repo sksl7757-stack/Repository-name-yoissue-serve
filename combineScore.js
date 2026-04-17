@@ -1,23 +1,16 @@
-// trend.mainMood / mainTopic 기반 동적 가중치 산출
-const HIGH_IMPACT_MOODS = ['긴장', '위기', '불안', '공포', '충격', '혼란', '경고', '비상', '분노', '위험'];
-const HIGH_IMPACT_TOPICS = ['전쟁', '재난', '폭락', '붕괴', '파산', '사망', '테러', '금융위기', '긴급'];
+'use strict';
 
-function resolveWeights(trend) {
-  const mood  = (trend?.mainMood  || '').trim();
-  const topic = (trend?.mainTopic || '').trim();
+// 최종 score 계산
+// impact × 0.5 + represent × 0.3 + diversity × 0.2
 
-  const isHighImpact =
-    HIGH_IMPACT_MOODS.some(k => mood.includes(k)) ||
-    HIGH_IMPACT_TOPICS.some(k => topic.includes(k));
-
-  return isHighImpact
-    ? { wImpact: 0.7, wRepresent: 0.3, label: '고위기 모드' }
-    : { wImpact: 0.6, wRepresent: 0.4, label: '일반 모드' };
+/**
+ * @param {number} impactScore    - scoreImpact() 반환값
+ * @param {number} representScore - scoreRepresent() 반환값
+ * @param {number} diversity      - (1 - similarity) * timeDecay  (0 ~ 1)
+ * @returns {number} finalScore
+ */
+function combineScore(impactScore, representScore, diversity) {
+  return impactScore * 0.5 + representScore * 0.3 + diversity * 0.2;
 }
 
-function combineScore(impactScore, representScore, trend) {
-  const { wImpact, wRepresent } = resolveWeights(trend);
-  return impactScore * wImpact + representScore * wRepresent;
-}
-
-module.exports = { combineScore, resolveWeights };
+module.exports = { combineScore };

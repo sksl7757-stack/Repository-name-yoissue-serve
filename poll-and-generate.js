@@ -32,12 +32,12 @@ const { buildImagePrompt } = require('./promptBuilder');
 
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_KEY = process.env.SUPABASE_SERVICE_KEY;
-const SD_MODEL     = process.env.SD_MODEL_NAME || 'v1-5-pruned-emaonly.safetensors';
 
-const COMFY_URL    = 'http://localhost:8188';
+const COMFY_URL    = process.env.COMFY_URL || 'http://localhost:8188';
 const BUCKET       = 'yoissue-images';
 const POLL_INTERVAL_MS = 5 * 60 * 1000; // 5분
 const LOCK_FILE    = path.join(__dirname, '.poll-generate.lock');
+const STATE_FILE   = path.join(__dirname, '.generated-state.json');
 
 const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
 
@@ -77,11 +77,40 @@ function sleep(ms) {
   return new Promise(r => setTimeout(r, ms));
 }
 
+// ── 뉴스 변경 감지용 로컬 상태 ────────────────────────────────────────────────────
+function loadState() {
+  try { return JSON.parse(fs.readFileSync(STATE_FILE, 'utf8')); }
+  catch { return { date: '', title: '' }; }
+}
+
+function saveState(date, title) {
+  fs.writeFileSync(STATE_FILE, JSON.stringify({ date, title }), 'utf8');
+}
+
+// ── 날짜별 Storage 폴더 전체 삭제 ─────────────────────────────────────────────────
+async function clearStorageForDate(date) {
+  console.log(`  🗑️  Storage ${date}/ 초기화 중...`);
+  for (const { charKey } of CHARACTERS) {
+    for (const imageType of ['situation', 'after']) {
+      const emotions = imageType === 'situation' ? SITUATION_EMOTIONS : AFTER_EMOTIONS;
+      for (const emotion of emotions) {
+        const folder = `${date}/${charKey}/${imageType}/${emotion}`;
+        const { data: files } = await supabase.storage.from(BUCKET).list(folder);
+        if (files && files.length > 0) {
+          const paths = files.map(f => `${folder}/${f.name}`);
+          await supabase.storage.from(BUCKET).remove(paths);
+          console.log(`    삭제: ${folder}/ (${paths.length}개)`);
+        }
+      }
+    }
+  }
+}
+
 // ── Supabase: 오늘 뉴스 조회 ────────────────────────────────────────────────────
 async function getTodayNews() {
   const { data, error } = await supabase
     .from('daily_news')
-    .select('date, title, category')
+    .select('date, title, category, summary, content')
     .eq('date', today())
     .maybeSingle();
   if (error) throw new Error('daily_news 조회 오류: ' + error.message);
@@ -124,11 +153,10 @@ async function generateAndUpload({ date, newsTitle, combo, interpretation }) {
     newsTitle,
     interpretation,
   });
-  console.log(`         prompt: ${imagePrompt.slice(0, 60)}...`);
+  console.log(`         prompt:\n${imagePrompt}`);
 
   // 3. ComfyUI에 워크플로 전송
-  const loraName  = combo.charKey === 'hana' ? 'hana.safetensors' : null;
-  const workflow  = buildComfyWorkflow(imagePrompt, SD_MODEL, loraName);
+  const workflow = buildComfyWorkflow(imagePrompt);
   const queueRes  = await fetch(`${COMFY_URL}/prompt`, {
     method:  'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -187,21 +215,40 @@ async function runOnce() {
 
   console.log(`  뉴스: [${news.category}] ${news.title.slice(0, 40)}...`);
 
+  // 뉴스 변경 감지 — 같은 날 뉴스가 바뀌면 Storage 초기화
+  const state = loadState();
+  if (state.date === date && state.title !== news.title) {
+    console.log(`  ⚠️  뉴스 변경 감지`);
+    console.log(`      이전: ${state.title.slice(0, 50)}`);
+    console.log(`      현재: ${news.title.slice(0, 50)}`);
+    await clearStorageForDate(date);
+  }
+
   // 2. 뉴스 장면 해석 (GPT 1회 — situation 이미지 전체에서 공유)
   let interpretation;
   try {
-    interpretation = await interpretNews({ category: news.category, newsTitle: news.title });
-    console.log(`  해석 완료: ${interpretation.event_core}`);
+    const summaryRaw = news.summary;
+    const summaryText = Array.isArray(summaryRaw) ? summaryRaw.join(' ') : (summaryRaw || '');
+    const bodyText = news.content && news.content.length >= 100 ? news.content : summaryText;
+    interpretation = await interpretNews({ category: news.category, newsTitle: news.title, newsSummary: bodyText });
+    console.log(`  해석 완료: ${interpretation.news_core}`);
+    if (interpretation.is_mourning_required) {
+      console.log(`  ⚠️  is_mourning_required=true — positive 이미지 스킵`);
+    }
   } catch (e) {
     console.error('  interpretNews 실패:', e.message);
     return;
   }
 
   // 3. 각 조합에 대해 Storage 직접 확인 후 생성/스킵
-  console.log(`📊 이미지 생성 시작 — 총 ${IMAGE_COMBOS.length}개 조합`);
+  // is_mourning_required=true 이면 positive emotion 조합 제외
+  const effectiveCombos = interpretation.is_mourning_required
+    ? IMAGE_COMBOS.filter(c => c.emotion !== 'positive' && c.emotion !== 'unsure')
+    : IMAGE_COMBOS;
+  console.log(`📊 이미지 생성 시작 — 총 ${effectiveCombos.length}개 조합${interpretation.is_mourning_required ? ' (positive/unsure 제외)' : ''}`);
   const results = [];
   let count = 0;
-  for (const combo of IMAGE_COMBOS) {
+  for (const combo of effectiveCombos) {
     count++;
     const label = `${combo.charKey}_${combo.imageType}_${combo.emotion}`;
     const folder = `${date}/${combo.charKey}/${combo.imageType}/${combo.emotion}`;
@@ -209,12 +256,12 @@ async function runOnce() {
     // Storage에서 직접 존재 여부 확인 (DB 컬럼 의존 안 함)
     const { data: storageFiles } = await supabase.storage.from(BUCKET).list(folder);
     if (storageFiles && storageFiles.length > 0) {
-      console.log(`📊 ${count}/${IMAGE_COMBOS.length} ✅ 스킵: ${label} (Storage에 존재)`);
+      console.log(`📊 ${count}/${effectiveCombos.length} ✅ 스킵: ${label} (Storage에 존재)`);
       results.push({ label, status: 'skipped', filePath: `${folder}/${storageFiles[0].name}` });
       continue;
     }
 
-    console.log(`📊 ${count}/${IMAGE_COMBOS.length} 생성: ${label}`);
+    console.log(`📊 ${count}/${effectiveCombos.length} 생성: ${label}`);
     try {
       const result = await generateAndUpload({
         date,
@@ -244,6 +291,9 @@ async function runOnce() {
     if (updateError) console.error('  image_paths 저장 실패:', updateError.message);
     else console.log(`  image_paths 저장 완료 (총 ${allPaths.length}개)`);
   }
+
+  // 이 뉴스로 이미지 생성 완료 — 상태 저장
+  saveState(date, news.title);
   } finally {
     isRunning = false;
   }

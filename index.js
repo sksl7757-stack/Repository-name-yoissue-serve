@@ -319,8 +319,7 @@ app.post('/generate-image', async (req, res) => {
     return res.status(400).json({ error: 'category, emotion, character, newsTitle 필요' });
   }
 
-  const SD_URL = process.env.SD_LOCAL_URL;
-  if (!SD_URL) return res.status(500).json({ error: 'SD_LOCAL_URL 환경변수 미설정' });
+  const SD_URL = process.env.COMFY_URL || 'http://localhost:8188';
 
   try {
     // 1. GPT로 영어 프롬프트 생성
@@ -384,8 +383,7 @@ app.post('/start-image-generation', async (req, res) => {
     return res.status(400).json({ error: 'category, title 필요' });
   }
 
-  const SD_URL = process.env.SD_LOCAL_URL;
-  if (!SD_URL) return res.status(500).json({ error: 'SD_LOCAL_URL 환경변수 미설정' });
+  const SD_URL = process.env.COMFY_URL || 'http://localhost:8188';
 
   const today = new Date().toISOString().slice(0, 10);
   const results = [];
