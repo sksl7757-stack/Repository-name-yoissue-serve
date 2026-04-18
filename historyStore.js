@@ -6,7 +6,7 @@
 const fs   = require('fs');
 const path = require('path');
 
-const HISTORY_PATH = path.join(__dirname, 'news-history.json');
+const HISTORY_PATH = path.join('/tmp', 'news-history.json');
 const MAX_HISTORY  = 30;
 
 /**

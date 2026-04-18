@@ -4,5 +4,8 @@
   ],
   "crons": [
     { "path": "/api/select-news", "schedule": "0 23 * * *" }
-  ]
+  ],
+  "functions": {
+    "api/select-news.js": { "maxDuration": 300 }
+  }
 }
