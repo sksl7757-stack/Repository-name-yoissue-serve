@@ -164,6 +164,7 @@ async function main() {
   const results = [];
 
   for (const row of rawRows) {
+    console.log('processing:', row.title);
     const itemStart = Date.now();
     try {
       // 크롤링
@@ -183,6 +184,7 @@ async function main() {
 
       // GPT 1회 호출 (분석 + 반응)
       const gpt = await analyzeAndReact(row.title, content);
+      console.log('analysis 결과:', gpt ? '있음' : '없음');
 
       const category = memorial ? '추모' : (gpt.category || '사회');
       const tag      = `오늘의 픽 · ${category}`;
@@ -222,19 +224,19 @@ async function main() {
   }
 
   // 3. 최고점 기사를 daily_news에 저장
-  if (results.length > 0) {
-    const best = results.sort((a, b) => b.score - a.score)[0];
-    const { error: dailyErr } = await supabase
-      .from('daily_news')
-      .upsert(best, { onConflict: 'date' });
-    if (dailyErr) {
-      console.error('  daily_news 저장 오류:', dailyErr.message);
-    } else {
-      console.log(`  daily_news 저장: ${best.title.slice(0, 40)}`);
-    }
-  } else {
-    console.warn('  처리된 기사 없음 — daily_news 미갱신');
-  }
+  // if (results.length > 0) {
+  //   const best = results.sort((a, b) => b.score - a.score)[0];
+  //   const { error: dailyErr } = await supabase
+  //     .from('daily_news')
+  //     .upsert(best, { onConflict: 'date' });
+  //   if (dailyErr) {
+  //     console.error('  daily_news 저장 오류:', dailyErr.message);
+  //   } else {
+  //     console.log(`  daily_news 저장: ${best.title.slice(0, 40)}`);
+  //   }
+  // } else {
+  //   console.warn('  처리된 기사 없음 — daily_news 미갱신');
+  // }
 
   console.log(`✅ [Stage 2] 완료: ${Date.now() - start}ms`);
 }
