@@ -83,12 +83,23 @@ const OPINION_WORDS = [
 
 function isOpinion(title) {
   if (title.includes('칼럼니스트')) return false;
-  return OPINION_WORDS.some(word => title.includes(word));
+  // 제목 맨 앞 대괄호 안에 오피니언 단어가 있을 때만 제외
+  // 예: "[칼럼] ...", "[기자수첩] ..." → 제외
+  // 예: "기자수첩으로 본 트럼프 관세" → 유지
+  const bracketMatch = title.match(/^\[([^\]]+)\]/);
+  if (bracketMatch) {
+    const bracketContent = bracketMatch[1];
+    return OPINION_WORDS.some(word => bracketContent.includes(word));
+  }
+  // 대괄호 없으면 칼럼/사설/오피니언 단어만 제외
+  const STRONG_OPINION = ['칼럼', '사설', '오피니언'];
+  return STRONG_OPINION.some(word => title.includes(word));
 }
 
 const WEAK_PATTERNS = [
   '포럼 개최', '행사 개최', '세미나 개최',
-  '간담회', '심포지엄', '컨퍼런스', '설명회', '기념식', '출범식',
+  // '간담회' 제거 — "국방부 긴급 간담회" 같은 중요 이슈 걸릴 수 있음
+  '심포지엄', '컨퍼런스', '설명회', '기념식', '출범식',
 ];
 
 function isWeakNews(title) {
@@ -205,20 +216,10 @@ async function main() {
   }
   finalItems = finalItems.slice(0, MAX_TOTAL);
 
-  // 2-1. impact 계산 + 최소 컷 + 30개 제한
+  // 2-1. impact 점수 순 정렬 후 상위 30개 (MIN_IMPACT 컷 제거 — GPT가 직접 중요도 판단)
   const scored = finalItems.map(item => ({ ...item, impact: scoreImpactTitle(item.title, item.link) }));
-  const MIN_IMPACT = 1;
-  let selected30 = scored.filter(item => item.impact >= MIN_IMPACT);
-  if (selected30.length > 30) {
-    selected30.sort((a, b) => b.impact - a.impact);
-    selected30 = selected30.slice(0, 30);
-  }
-  if (selected30.length < 30) {
-    const need = 30 - selected30.length;
-    const remaining = scored.filter(item => !selected30.includes(item)).slice(0, need);
-    selected30 = selected30.concat(remaining);
-  }
-  const finalSelected = selected30.map(({ impact, ...rest }) => rest);
+  scored.sort((a, b) => b.impact - a.impact);
+  const finalSelected = scored.slice(0, 30).map(({ impact, ...rest }) => rest);
   console.log(`  최종 30개 선정: ${finalSelected.length}건`);
 
   // 3. URL 기준 중복 제거

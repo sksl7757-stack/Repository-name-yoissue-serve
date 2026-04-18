@@ -4,15 +4,7 @@
 
 const { loadEnv }          = require('./loadEnv');
 const { supabase }         = require('./supabase');
-const { scoreImpact }      = require('./scoreImpact');
-const { analyzeTrend }     = require('./analyzeTrend');
-const { scoreRepresent }   = require('./scoreRepresent');
-const { combineScore }     = require('./combineScore');
-const { calcSimilarity }   = require('./similarity');
-const { calcTimeDecay }    = require('./timeDecay');
 const { loadHistory, saveHistory } = require('./historyStore');
-const { generateEventId }  = require('./eventId');
-const { extractKeywords }  = require('./services/keywordExtractor');
 const { stripHtml }        = require('./stripHtml');
 
 loadEnv();
@@ -45,8 +37,6 @@ function pickMemorialNews(memorial, candidates) {
     if (MEMORIAL_TITLE_WORDS.some(w => title.includes(w)))   score += 5;
     if (title.includes(memorial.name))                        score += 3;
     if (MEMORIAL_CONTENT_WORDS.some(w => content.includes(w))) score += 2;
-    const eid = generateEventId(item, memorial.name);
-    if (eid.includes('추모') || eid.includes('memorial'))     score += 5;
 
     return { item, score };
   });
@@ -154,6 +144,21 @@ function makeSummary(content) {
   return result;
 }
 
+// ─── 제목 중복 제거 ───────────────────────────────────────────────────────────
+
+function deduplicateByTitle(items) {
+  const seen = new Set();
+  return items.filter(item => {
+    const key = item.title
+      .replace(/\[속보\]|\[단독\]|\[긴급\]/g, '')
+      .trim()
+      .slice(0, 20);
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
 // ─── 잡탕 기사 필터 ───────────────────────────────────────────────────────────
 
 function isMixedContent(item) {
@@ -172,18 +177,6 @@ function isMixedContent(item) {
     }
   }
 
-  // [A] 4개 이상 카테고리에 키워드 분산
-  const keywords = extractKeywords(item);
-  if (keywords.length >= 6) {
-    const hitCategories = new Set();
-    for (const kw of keywords) {
-      for (const { name, keywords: catKws } of CATEGORY_RULES) {
-        if (catKws.some(ck => kw.includes(ck) || ck.includes(kw))) hitCategories.add(name);
-      }
-    }
-    if (hitCategories.size >= 4) return { filtered: true, reason: `A-카테고리분산×${hitCategories.size}` };
-  }
-
   // [C] 앞 2문장 vs 나머지 카테고리 불일치
   if (sentences.length >= 5) {
     const getCats = text => {
@@ -199,16 +192,6 @@ function isMixedContent(item) {
       const common = [...frontCats].filter(c => backCats.has(c));
       if (common.length === 0) return { filtered: true, reason: `C-주제불일치` };
     }
-  }
-
-  // [D] 긴 본문인데 키워드 반복 없음
-  if (content.length > 800 && keywords.length >= 3) {
-    const fullText    = (item.title || '') + ' ' + content;
-    const anyRepeated = keywords.some(kw => {
-      const escaped = kw.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-      return (fullText.match(new RegExp(escaped, 'g')) || []).length >= 2;
-    });
-    if (!anyRepeated) return { filtered: true, reason: `D-키워드반복없음` };
   }
 
   return { filtered: false };
@@ -364,47 +347,80 @@ async function analyzeAndReact(title, content) {
   return JSON.parse(data.choices[0].message.content);
 }
 
-// ─── 뉴스 선정 ────────────────────────────────────────────────────────────────
+// ─── 뉴스 선정 (GPT) ─────────────────────────────────────────────────────────
 
-function pickBestNews(newsList, analysisMap, history) {
-  const nowMs = Date.now();
+async function pickBestNews(newsList, history) {
+  const today = new Date().toISOString().slice(0, 10);
+  const recentTitles = history.slice(0, 7).map(h => h.title);
 
-  console.log('    가중치: impact×0.5 + represent×0.3 + diversity×0.2');
+  const candidates = newsList.map((item, i) => ({
+    index: i,
+    title: item.title,
+    source: inferSource(item.url || item.link || ''),
+    summary: (item.content || item.description || '').slice(0, 150),
+  }));
 
-  const pool = newsList;
+  const prompt = `오늘 날짜: ${today}
 
-  const scored = pool.map(item => {
-    const impact   = scoreImpact(item);
-    const itemCat  = inferTag(item).replace('오늘의 픽 · ', '').trim();
-    const analysis = analysisMap[itemCat] || { topics: [] };
-    const represent = scoreRepresent(item, analysis);
+아래 뉴스 목록에서 오늘 한국 사람들이 가장 주목해야 할 뉴스 1개를 골라줘.
 
-    const matchedKeyword = (() => {
-      const text = item.title + ' ' + (item.content || '');
-      let best = null, bestW = -1;
-      for (const t of (analysis.topics || [])) {
-        const hits = (t.keywords || []).filter(k => text.includes(k)).length;
-        if (hits > 0 && t.weight > bestW) { bestW = t.weight; best = t; }
-      }
-      return best?.keywords?.[0] || null;
-    })();
+선정 기준 (우선순위 순):
+1. 오늘 한국 및 세계에서 가장 크게 터진 사건/발표/정책
+2. 파급력과 중요도가 큰 이슈
+3. 단일 주제 기사 (여러 이슈 묶음 기사 제외)
 
-    const eid = generateEventId(item, matchedKeyword);
-    const { similarity, timestamp: simTs } = calcSimilarity(item, history, eid);
-    const decay      = calcTimeDecay(nowMs, simTs);
-    const diversity  = (1 - similarity) * decay;
-    const finalScore = combineScore(impact, represent, diversity);
-    return { item, impact, represent, diversity, finalScore, eventId: eid };
+반드시 제외:
+- 지자체/기관 홍보성 보도자료
+- 행사/세미나/포럼 안내
+- 사설/칼럼/기고
+
+출처 기준 (중요):
+- 연합뉴스, 뉴시스, 뉴스1, YTN, KBS, MBC, SBS, JTBC,
+  조선일보, 중앙일보, 동아일보, 한겨레, 경향신문,
+  한국경제, 매일경제, 서울경제, 이데일리, 머니투데이
+  위 주요 전국 매체 기사가 후보에 있으면 반드시 그 중에서 선택해라.
+- 위 매체 기사가 하나도 없을 때만 소규모 매체 선택 가능.
+
+최근 며칠간 이미 선정된 뉴스 (중복 피하기):
+${recentTitles.length > 0 ? recentTitles.map((t, i) => `${i + 1}. ${t}`).join('\n') : '없음'}
+
+뉴스 목록:
+${candidates.map(c => `[${c.index}] ${c.title} (${c.source})\n    ${c.summary}`).join('\n\n')}
+
+아래 JSON 형식으로만 응답:
+{
+  "selected_index": 숫자,
+  "reason": "선정 이유 한 줄 (한국어)"
+}`;
+
+  const res = await fetch('https://api.openai.com/v1/chat/completions', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${OPENAI_KEY}`,
+    },
+    body: JSON.stringify({
+      model: 'gpt-4o-mini',
+      max_tokens: 200,
+      temperature: 0,
+      response_format: { type: 'json_object' },
+      messages: [{ role: 'user', content: prompt }],
+    }),
   });
 
-  scored.sort((a, b) => b.finalScore - a.finalScore);
+  const data = await res.json();
+  if (data.error) throw new Error('GPT 선정 오류: ' + data.error.message);
 
-  console.log('  [상위 3건]');
-  scored.slice(0, 3).forEach(({ item, impact, represent, diversity, finalScore, eventId: eid }, i) => {
-    console.log(`    ${i + 1}위 [${finalScore.toFixed(2)}점 | impact:${impact} rep:${represent.toFixed(2)} div:${diversity.toFixed(2)}] [${eid}] ${item.title.slice(0, 40)}`);
-  });
+  const result = JSON.parse(data.choices[0].message.content);
+  const idx = result.selected_index;
 
-  return scored[0];
+  if (idx === undefined || idx < 0 || idx >= newsList.length) {
+    console.warn('  GPT 선정 index 오류, fallback: 0번');
+    return newsList[0];
+  }
+
+  console.log(`  GPT 선정: [${idx}번] ${result.reason}`);
+  return newsList[idx];
 }
 
 // ─── 병렬 처리 유틸 ──────────────────────────────────────────────────────────
@@ -483,8 +499,12 @@ async function main() {
     }));
   }
 
-  // 4. 잡탕 기사 필터
-  const cleanContent = withContent.filter(item => {
+  // 4. 제목 중복 제거
+  const deduped = deduplicateByTitle(withContent);
+  console.log(`  제목 중복 제거: ${withContent.length - deduped.length}건 제거, ${deduped.length}건 남음`);
+
+  // 5. 잡탕 기사 필터
+  const cleanContent = deduped.filter(item => {
     const r = isMixedContent(item);
     if (r.filtered) {
       console.log(`  [잡탕 제거] ${r.reason} | ${item.title.slice(0, 40)}`);
@@ -492,15 +512,15 @@ async function main() {
     }
     return true;
   });
-  const pool = cleanContent.length > 0 ? cleanContent : withContent;
+  const pool = cleanContent.length > 0 ? cleanContent : deduped;
   console.log(`  잡탕 필터 후: ${pool.length}건`);
 
-  // 5. 이력 로드
+  // 6. 이력 로드
   const history = loadHistory();
   console.log(`  이력 로드: ${history.length}건`);
 
-  // 6. 추모일 강제 선택
-  let selected, analysisMap = {};
+  // 7. 추모일 강제 선택
+  let selected;
   if (memorial) {
     const memorialNews = pool.filter(item =>
       memorial.keywords.some(kw => item.title.includes(kw) || (item.content || '').includes(kw))
@@ -508,50 +528,17 @@ async function main() {
     if (memorialNews.length > 0) {
       console.log(`  🕯️ 추모일 (${memorial.name}) — 관련 뉴스 ${memorialNews.length}건`);
       const best = pickMemorialNews(memorial, memorialNews);
-      selected = { item: best, finalScore: 99, eventId: generateEventId(best, memorial.name) };
+      selected = { item: best, finalScore: 99, eventId: '' };
     } else {
       console.warn(`  ⚠ 추모일 관련 뉴스 없음 — 일반 선정으로 전환`);
     }
   }
 
-  // 7. 일반 선정 (카테고리별 analyzeTrend)
+  // 8. GPT 선정
   if (!selected) {
-    console.log('  GPT 트렌드 분석 중 (카테고리별)...');
-    const categoryGroups = {};
-    for (const item of pool) {
-      const cat = inferTag(item).replace('오늘의 픽 · ', '').trim();
-      if (!categoryGroups[cat]) categoryGroups[cat] = [];
-      categoryGroups[cat].push(item);
-    }
-    console.log(`  카테고리: ${Object.entries(categoryGroups).map(([c, v]) => `${c}(${v.length}건)`).join(', ')}`);
-
-    analysisMap = {};
-    await Promise.all(
-      Object.entries(categoryGroups).map(async ([cat, items]) => {
-        if (items.length < 2) {
-          const keywords = extractKeywords(items[0] || {});
-          analysisMap[cat] = {
-            topics: [{ name: cat, keywords: keywords.slice(0, 3), weight: 1 }],
-            mainMood: '',
-            reason: 'fallback',
-          };
-          return;
-        }
-        try {
-          analysisMap[cat] = await analyzeTrend(items, OPENAI_KEY);
-          const top = (analysisMap[cat].topics || []).sort((a, b) => b.weight - a.weight)[0];
-          console.log(`  [${cat}] ${analysisMap[cat].mainMood} — ${top?.keywords?.[0] || '?'}`);
-        } catch (e) {
-          console.warn(`  [${cat}] analyzeTrend 실패:`, e.message);
-          analysisMap[cat] = { topics: [], mainMood: '', reason: '' };
-        }
-      })
-    );
-
-    console.log(`  최종 후보 수: ${pool.length}건`);
-    console.log('  점수 계산 및 선정 중...');
-    const result = pickBestNews(pool, analysisMap, history);
-    selected = result;
+    console.log('  GPT 뉴스 선정 중...');
+    const best = await pickBestNews(pool, history);
+    selected = { item: best, finalScore: 0, eventId: '' };
   }
 
   // 8. 반응 생성 (선정된 기사만)
@@ -587,7 +574,7 @@ async function main() {
     reactions,
     score:     selected.finalScore,
     pushed:    false,
-    analysis:  analysisMap[category] || {},
+    analysis:  {},
   };
 
   const { error: insertErr } = await supabase.from('news_processed').insert(record);
