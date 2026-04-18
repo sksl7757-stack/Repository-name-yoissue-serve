@@ -3,14 +3,12 @@ const express = require('express');
 const cors = require('cors');
 
 const { getState, updateState } = require('./stateManager');
-const { filterTopic } = require('./topicFilter');
-const { classifyIntent } = require('./intentClassifier');
 const { generateReply, buildSystemPrompt } = require('./generator');
 const { validate } = require('./validator');
 const { buildResponse } = require('./responseBuilder');
 const { saveNews, getSavedNews } = require('./saveNews');
 const { addRecord, getRecords } = require('./records');
-const { supabase, getTodayNews } = require('./supabase');
+const { supabase } = require('./supabase');
 const { buildComfyWorkflow } = require('./comfyUtils');
 const { interpretNews }    = require('./newsInterpreter');
 const { buildImagePrompt } = require('./promptBuilder');
@@ -80,7 +78,7 @@ app.post('/chat-opening', async (req, res) => {
 
 // /chat — harness orchestration
 app.post('/chat', async (req, res) => {
-  const { type, messages, character, memory, perspectiveStep = 0, primaryCharName = null, primaryComment = null, primaryEmotion = null } = req.body;
+  const { type, messages, character, memory, perspectiveStep = 0, primaryCharName = null, primaryComment = null, primaryEmotion = null, characterEmotion = null } = req.body;
   try {
     // PERSPECTIVE_NEXT: 시스템 트리거 — topic 검사 없이 바로 생성
     if (type === 'PERSPECTIVE_NEXT') {
@@ -94,35 +92,27 @@ app.post('/chat', async (req, res) => {
           end: true,
         });
       }
-      const rawReply = await generateReply({ character, messages, memory, perspectiveStep, isPerspectiveRequest: true });
-      const validatedReply = validate({ reply: rawReply.text, phase: 'CHAT', topicStatus: 'ON_TOPIC', character });
+      console.log('[stance-in]', character, '→', characterEmotion);
+      const rawReply = await generateReply({ character, messages, memory, perspectiveStep, isPerspectiveRequest: true, characterEmotion });
+      const validatedReply = validate({ reply: rawReply.text, phase: 'CHAT', character });
       return res.json(buildResponse({ message: validatedReply.message, question: validatedReply.question, emotion: rawReply.emotion }));
     }
 
     // 1. state 읽기 (코드에서만 결정 — LLM 관여 없음)
     const { phase, questionAsked } = getState(messages, perspectiveStep);
 
-    // 2. topicFilter 실행
-    const userInput = messages?.[messages.length - 1]?.content || '';
-    let newsTitle = '';
-    try {
-      const todayNews = await getTodayNews();
-      newsTitle = todayNews?.title || '';
-    } catch {}
-    let topicStatus = 'ON_TOPIC';
-    if (phase === 'CHAT') {
-      topicStatus = filterTopic(userInput, newsTitle);
-    }
-
-    const intent = classifyIntent(userInput);
-    console.log('intent:', intent);
 
     // 3. generator 실행 (말투/스타일만 담당)
-    const rawReply = await generateReply({ character, messages, memory, perspectiveStep, phase, primaryCharName, primaryComment, primaryEmotion });
+    console.log('[stance-in]', character, '→', characterEmotion);
+    const rawReply = await generateReply({ character, messages, memory, perspectiveStep, phase, primaryCharName, primaryComment, primaryEmotion, characterEmotion });
     console.log('generator reply:', rawReply);
 
     // 4. validator 실행 (질문 추가/제거, 주제 이탈 — 코드에서만 결정)
-    const validatedReply = validate({ reply: rawReply.text, phase, topicStatus, character });
+    const validatedReply = validate({ reply: rawReply.text, phase, character });
+    console.log('validated:', JSON.stringify({
+      message: validatedReply.message?.slice(0, 80),
+      question: validatedReply.question,
+    }));
 
     // 4-1. validator가 질문을 추가했으면 state 업데이트 (다음 요청 대비 로깅용)
     const updatedState = updateState({ phase, questionAsked }, {

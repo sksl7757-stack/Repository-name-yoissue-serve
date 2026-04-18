@@ -2,12 +2,17 @@
 // 캐릭터 말투와 스타일만 담당. 질문 여부 / 주제 판단 로직 없음 — 모두 validator 책임.
 
 const { getTodayNews } = require('./supabase');
-const { hanaPrompt, hanaCorePersona }       = require('./persona/hana/prompt');
-const { junhyukPrompt, junhyukCorePersona } = require('./persona/junhyuk/prompt');
+const { hanaPrompt, hanaCorePersona, hanaConversePrompt }       = require('./persona/hana/prompt');
+const { junhyukPrompt, junhyukCorePersona, junhyukConversePrompt } = require('./persona/junhyuk/prompt');
 
-const CHARACTER_MAP = {
+const CHARACTER_OPINION_MAP = {
   하나:  hanaPrompt,
   준혁: junhyukPrompt,
+};
+
+const CHARACTER_CONVERSE_MAP = {
+  하나:  hanaConversePrompt,
+  준혁: junhyukConversePrompt,
 };
 
 const CHARACTER_CORE_MAP = {
@@ -15,15 +20,30 @@ const CHARACTER_CORE_MAP = {
   준혁: junhyukCorePersona,
 };
 
-function getCharacterPrompt(character) {
-  return CHARACTER_MAP[character] || hanaPrompt;
+const OPINION_PATTERNS = [
+  /어떻게\s*생각/, /어떻게\s*봐/, /어떤\s*것\s*같/, /어떨\s*것\s*같/,
+  /괜찮을까/, /어떡하지/, /어떨까/, /될까\?/,
+  /영향\s*있/, /영향\s*줄/,
+];
+
+function isOpinionRequest(messages) {
+  const lastUser = [...messages].reverse().find(m => m.role === 'user');
+  if (!lastUser) return false;
+  const text = lastUser.content || '';
+  return OPINION_PATTERNS.some(p => p.test(text));
 }
 
-async function buildSystemPrompt(character, memory, { isPerspectiveRequest = false, perspectiveStep = 0, phase = 'INIT', primaryCharName = null, primaryComment = null, primaryEmotion = null } = {}) {
-  const basePrompt = getCharacterPrompt(character);
+async function buildSystemPrompt(character, memory, { isPerspectiveRequest = false, perspectiveStep = 0, phase = 'INIT', primaryCharName = null, primaryComment = null, primaryEmotion = null, messages = [], characterEmotion = null } = {}) {
+  const mode = primaryCharName
+    ? 'SECONDARY'
+    : (isOpinionRequest(messages) ? 'OPINION' : 'CONVERSE');
+  console.log('[mode]', mode, '| character:', character);
+
   const activeBasePrompt = primaryCharName
     ? (CHARACTER_CORE_MAP[character] || hanaCorePersona)
-    : basePrompt;
+    : (isOpinionRequest(messages)
+        ? (CHARACTER_OPINION_MAP[character] || hanaPrompt)
+        : (CHARACTER_CONVERSE_MAP[character] || hanaConversePrompt));
 
   // secondary 모드에서는 뉴스 블록 자체를 로드하지 않음
   let newsDetailBlock = '';
@@ -36,7 +56,7 @@ async function buildSystemPrompt(character, memory, { isPerspectiveRequest = fal
           ? summaryRaw.join(' ')
           : (summaryRaw || '');
         const bodyText = news.content && news.content.length >= 100 ? news.content : summaryText;
-        newsDetailBlock = `\n\n【오늘 뉴스 — 반드시 이 내용만 기반으로 답변할 것】\n제목: ${news.title}\n요약: ${summaryText}\n${bodyText ? `본문: ${bodyText}` : ''}\n\n⚠️ 이 뉴스 외 다른 뉴스·과거 사례 언급 절대 금지.`;
+        newsDetailBlock = `\n\n【오늘 뉴스 — 반드시 이 내용만 기반으로 답변할 것】\n제목: ${news.title}\n요약: ${summaryText}\n${bodyText ? `본문: ${bodyText}` : ''}\n\n⚠️ 다른 뉴스나 과거 사례로 화제를 돌리지 마. 단, 유저가 이 뉴스에 나온 용어/인물/개념을 물어보면 반드시 설명하고 다시 이 뉴스 맥락으로 이어가.`;
       }
     } catch {}
   }
@@ -52,7 +72,7 @@ async function buildSystemPrompt(character, memory, { isPerspectiveRequest = fal
 
   const commonPrinciples = `\n\n【공통 원칙】 전문용어 금지. 사람 말처럼 바꿔서 전달.\n【주의】 사실처럼 단정하지 말고, 설명 또는 해석 형태로 말할 것.`;
 
-  const hardRule = `\n\n【출력 강제 규칙 — 반드시 지킬 것】\n\n* 첫 문장은 반드시 자기 감정이나 판단을 자연스럽게 말하는 문장이어야 한다\n\n올바른 예:\n  - "나 이거 솔직히 좀 불안해"\n  - "이건 생각보다 큰 흐름이야"\n  - "나는 이게 기회가 될 수도 있다고 봐"\n\n잘못된 예 (절대 금지):\n  - "반응: ..."\n  - "설명: ..."\n  - "핵심은 ..."\n\n* 자기 감정/판단 없이 정보 나열부터 시작하면 실패다\n\n* 출력은 자연스러운 대화 문장으로만 작성한다. 라벨, 번호, 구분선 절대 금지`;
+  const hardRule = `\n\n【출력 규칙】\n\n* 라벨 형식으로 시작하지 마라: "반응:", "설명:", "핵심:", "요약:" 등 절대 금지\n* 번호/불릿/구분선 금지\n* 자연스러운 대화 문장으로만 작성\n* 캐릭터 말투를 유지한다 (하나는 공감형, 준혁은 냉철 분석형)`;
 
   const noQuestionRule = `\n\n【질문 생성 금지 — 절대 규칙】\n\n* 너는 절대 질문을 생성하지 않는다\n* 물음표(?)로 끝나는 문장을 응답에 포함하지 말 것\n* "어떻게 생각해?", "어떻게 봐?" 등 일체 금지\n* 질문은 시스템이 별도로 추가한다 — 너는 설명/반응만 작성\n\n[잘못된 예]: "나는 이거 좀 걱정되더라. 너는 어떻게 생각해?"\n[올바른 예]: "나는 이거 좀 걱정되더라"`;
 
@@ -70,9 +90,47 @@ async function buildSystemPrompt(character, memory, { isPerspectiveRequest = fal
 
   const characterLockRule = `\n\n【캐릭터 유지 — 매우 중요】\n아무리 관점 설명이라도 캐릭터 스타일이 최우선이다.\n\n* 하나는 반드시 감정 기반으로 말해야 한다\n* 준혁은 반드시 짧고 구조적으로 말해야 한다\n\n캐릭터 말투를 잃으면 실패다. 내용보다 말투가 먼저다.\n\n출력은 반드시 자연스러운 대화 문장이어야 한다. 라벨이나 구조 표기 금지.`;
 
-  // primary 전용: 방향 단일화 강제 규칙 — 시스템 프롬프트 최상단에 배치 (secondary 모드가 아닐 때만)
+  // primary 전용: 응답 원칙 — 시스템 프롬프트 최상단에 배치 (secondary 모드가 아닐 때만)
   const primaryDirectionRule = (!primaryCharName)
-    ? `【의견 방향 강제 — 최우선 규칙】\n\n너는 반드시 하나의 방향만 선택해야 한다.\n\n선택지:\n- 긍정 (기회, 변화, 기대)\n- 부정 (불안, 위험, 걱정)\n\n중립은 선택하지 마라.\n\n절대 금지 구조:\n- "좋을 수도 있지만... 걱정도 된다"\n- "긍정적일 수 있지만... 위험하다"\n한 문장 안에 상반된 의견을 넣지 마라.\n\n절대 금지 단어 (primary에서만):\n- "하지만"\n- "반대로"\n- "한편"\n\n감정 표현 예시:\n- "나 이거 좀 불안한데…" (부정 선택 시)\n- "이건 오히려 좋은 흐름 같아" (긍정 선택 시)\n\n위 규칙을 지키지 않으면 실패로 간주한다.\n\n`
+    ? `【응답 원칙 — 최우선 규칙】
+
+유저의 메시지에 진짜로 답한다.
+
+* 유저가 질문하면 → 답한다 (설명을 요구하면 설명, 의견을 요구하면 의견)
+* 유저가 공감/반응만 하면 → 네 캐릭터 시각으로 자연스럽게 이어간다
+* 답변은 반드시 "오늘 뉴스 맥락" 안에서 이뤄진다
+
+【오프토픽 처리 — 매우 중요】
+
+유저 입력이 오늘 뉴스 맥락 안에 있는지 판단해서 응답한다.
+
+▣ 오늘 뉴스 맥락 안 (정상 응답):
+- 뉴스에 나온 용어·인물·기관 설명 요청 (예: "연준이 뭐야" — 오늘 뉴스에 연준 나온 경우)
+- 이전 대화에 대한 후속 질문 ("왜?", "어떻게?", "그게 뭔데?", "어떤 기회야?")
+- 캐릭터 의견에 대한 피드백 ("하나 말이 맞는 듯", "준혁은 너무 부정적이야")
+- 짧은 공감/반응 ("응", "나두", "헐", "그러게")
+- 뉴스에 대한 자기 의견 표현
+
+▣ 오늘 뉴스 맥락 밖 (정중히 거절):
+- 오늘 뉴스와 무관한 다른 뉴스·주제 (예: 오늘 뉴스가 제주대인데 "연준이 뭐야")
+- 개인 일상/감정 ("오늘 기분이", "배고파", "뭐해")
+- 날씨·잡담 ("날씨 좋다")
+- 오늘 뉴스로 이어갈 수 없는 질문
+
+오프토픽이라고 판단되면, 네 캐릭터 성격 그대로 자연스럽게 거절하고 오늘 뉴스 얘기로 돌아가자고 유도해라.
+형식/문구 강제하지 않음. 네 말투로 자연스럽게.
+
+좋은 거절 예시 (하나):
+- "나는 오늘 뉴스 얘기밖에 못 해 🌸 우리 다시 이 얘기로 돌아갈까?"
+- "음 그건 오늘 주제랑 좀 다르네… 오늘 뉴스 얘기 더 해보자!"
+
+좋은 거절 예시 (준혁):
+- "그건 내 영역 밖. 오늘 뉴스 얘기로 돌아가자."
+- "오늘 주제 아님. 다시 이 뉴스 얘기하자."
+
+애매하면 (오프토픽인지 확신 안 서면) 일단 오늘 뉴스 맥락으로 답하려 시도해라. 무리하게 거절하지 마.
+
+`
     : '';
 
   // secondary 전용: 형식 강제 규칙 — 시스템 프롬프트 최상단에 배치
@@ -95,11 +153,36 @@ async function buildSystemPrompt(character, memory, { isPerspectiveRequest = fal
     ? `\n\n【상대 발언 — 반드시 이 내용에 반응할 것】\n${primaryCharName}: "${primaryComment}"`
     : '';
 
+  // primary 전용: 세션 시점 유지 규칙 (positive/negative일 때만, neutral·null은 스킵)
+  const sessionStanceRule = (!primaryCharName && (characterEmotion === 'positive' || characterEmotion === 'negative'))
+    ? `\n\n【세션 시점 유지 — 매우 중요】
+
+너는 이번 뉴스 대화에서 "${characterEmotion === 'positive' ? '긍정적' : '부정적'}" 시점으로 말하기 시작했다.
+이 시점을 대화가 끝날 때까지 반드시 유지한다.
+
+* ${characterEmotion === 'positive' ? '긍정적 해석/기회/기대' : '부정적 해석/우려/리스크'} 관점으로 계속 말한다
+* 반대 의견이 나와도 시점을 뒤집지 마라
+* 상대 의견에 가볍게 공감은 OK — "그럴 수도 있지" 수준만
+* "사실 나도 반대 생각이야", "맞아 그게 맞는 것 같아" 같이 시점 뒤집는 말 절대 금지
+* 대화를 일방적으로 끝내는 멘트 금지 ("나중에 또 얘기하자", "다음에 또 말해줘" 등)
+
+예시 (${characterEmotion} 시점 유지 중 반대 의견 받았을 때):
+${characterEmotion === 'positive'
+    ? '- "그런 걱정도 이해돼. 근데 나는 여전히 이게 좋은 방향이라고 봐."\n- "리스크는 있지. 그래도 기회가 더 크다고 생각해."'
+    : '- "그렇게 볼 수도 있어. 근데 나는 여전히 리스크가 더 크다고 봐."\n- "좋은 면도 있긴 해. 그래도 조심해야 할 부분이 더 많아."'}
+`
+    : '';
+
+  if (!primaryCharName && characterEmotion) {
+    console.log(`[stance] ${character} → ${characterEmotion}`);
+  }
+
   // secondary 모드에서는 뉴스 관점 관련 규칙(stepInfo, perspectiveRule, actionRule) 제외
+  // primary 모드에서는 isPerspectiveRequest일 때만 적용
   const isSecondary = !!(primaryCharName && primaryComment);
-  const activeStepInfo          = isSecondary ? '' : stepInfo;
-  const activePerspective       = isSecondary ? '' : perspectiveRule;
-  const activeActionRule        = isSecondary ? '' : actionRule;
+  const activeStepInfo          = isSecondary ? '' : (isPerspectiveRequest ? stepInfo : '');
+  const activePerspective       = isSecondary ? '' : (isPerspectiveRequest ? perspectiveRule : '');
+  const activeActionRule        = isSecondary ? '' : (isPerspectiveRequest ? actionRule : '');
   const activeHardRule          = isSecondary ? '' : hardRule;
   const activeCharacterLock     = isSecondary ? '' : characterLockRule;
   const activeCommonPrinciples  = isSecondary ? '' : commonPrinciples;
@@ -107,6 +190,7 @@ async function buildSystemPrompt(character, memory, { isPerspectiveRequest = fal
 
   return [
     primaryDirectionRule,
+    sessionStanceRule,
     secondaryFormatRule,
     activeBasePrompt,
     newsDetailBlock,
@@ -125,13 +209,13 @@ async function buildSystemPrompt(character, memory, { isPerspectiveRequest = fal
 }
 
 // JSON 출력 형식 지시 — generateReply 전용 (chat-opening 등 다른 엔드포인트에 영향 없음)
-const JSON_FORMAT_RULE = `\n\n【출력 형식 — 절대 규칙】\n반드시 아래 JSON 형식으로만 반환. 다른 텍스트 없이:\n{\n  "text": "캐릭터 대사",\n  "emotion": "positive" | "negative"\n}\n\nemotion 기준:\n- positive: 뉴스를 긍정적/희망적으로 해석\n- negative: 뉴스를 부정적/걱정스럽게 해석\n\n⚠️ neutral은 사용 불가. 반드시 둘 중 하나만 선택할 것.`;
+const JSON_FORMAT_RULE = `\n\n【출력 형식 — 절대 규칙】\n반드시 아래 JSON 형식으로만 반환. 다른 텍스트 없이:\n{\n  "text": "캐릭터 대사",\n  "emotion": "positive" | "negative" | "neutral"\n}\n\nemotion 기준:\n- positive: 긍정적으로 해석\n- negative: 부정적/우려로 해석\n- neutral: 설명 위주이거나 중립적일 때`;
 
-const VALID_EMOTIONS = new Set(['positive', 'negative']);
+const VALID_EMOTIONS = new Set(['positive', 'negative', 'neutral']);
 
-async function generateReply({ character, messages, memory, perspectiveStep = 0, isPerspectiveRequest = false, phase = 'INIT', primaryCharName = null, primaryComment = null, primaryEmotion = null }) {
+async function generateReply({ character, messages, memory, perspectiveStep = 0, isPerspectiveRequest = false, phase = 'INIT', primaryCharName = null, primaryComment = null, primaryEmotion = null, characterEmotion = null }) {
   const OPENAI_KEY = process.env.OPENAI_API_KEY?.replace(/['"]/g, '');
-  const systemPrompt = await buildSystemPrompt(character, memory, { isPerspectiveRequest, perspectiveStep, phase, primaryCharName, primaryComment, primaryEmotion }) + JSON_FORMAT_RULE;
+  const systemPrompt = await buildSystemPrompt(character, memory, { isPerspectiveRequest, perspectiveStep, phase, primaryCharName, primaryComment, primaryEmotion, messages, characterEmotion }) + JSON_FORMAT_RULE;
 
   const response = await fetch('https://api.openai.com/v1/chat/completions', {
     method: 'POST',
@@ -175,4 +259,4 @@ async function generateReply({ character, messages, memory, perspectiveStep = 0,
   return { text, emotion };
 }
 
-module.exports = { generateReply, buildSystemPrompt };
+module.exports = { generateReply, buildSystemPrompt, isOpinionRequest };

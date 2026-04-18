@@ -1,12 +1,6 @@
 // validator.js — 모든 규칙 통제. LLM 응답을 검증하고 강제로 수정.
-// 질문 추가/제거, 주제 이탈 처리를 코드에서만 결정.
+// 질문 추가/제거를 코드에서만 결정. 오프토픽 처리는 GPT 프롬프트 담당.
 const { PHASE } = require('./stateManager');
-const { TOPIC } = require('./topicFilter');
-
-const OFF_TOPIC_REDIRECTS = {
-  하나: '나는 오늘 뉴스 얘기만 할 수 있어 😊 이 주제로 다시 얘기해보자!',
-  준혁: '오늘 뉴스 주제로만 대화 가능함. 다시 뉴스 얘기로 돌아가자.',
-};
 
 // 코드에서 고정한 질문 — LLM이 생성한 질문을 사용하지 않음
 // 두 캐릭터의 대립 구도를 명확히 해서 퀵리플라이 선택으로 자연스럽게 연결
@@ -31,30 +25,23 @@ function stripQuestions(text) {
 }
 
 /**
- * GPT 응답을 phase / topicStatus 기준으로 강제 수정.
+ * GPT 응답을 phase 기준으로 강제 수정.
  *
- * INIT     → LLM 질문 제거 후 코드 고정 질문을 별도 필드로 반환
- * CHAT     → 질문 문장 무조건 제거, question = null
- * OFF_TOPIC → 뉴스 주제 복귀 안내 메시지 반환
+ * INIT → LLM 질문 제거 후 코드 고정 질문을 별도 필드로 반환
+ * CHAT → 질문 문장 무조건 제거, question = null
  *
- * @param {{ reply: string, phase: string, topicStatus: string, character: string }}
+ * @param {{ reply: string, phase: string, character: string }}
  * @returns {{ message: string, question: string|null }}
  */
-function validate({ reply, phase, topicStatus, character }) {
-  // 1. 주제 이탈 → 리디렉션 (LLM 응답 무시)
-  if (topicStatus === TOPIC.OFF) {
-    const redirect = OFF_TOPIC_REDIRECTS[character] || OFF_TOPIC_REDIRECTS['하나'];
-    return { message: redirect, question: null };
-  }
-
-  // 2. INIT → 설명(message) + 고정 질문(question) 분리 반환
+function validate({ reply, phase, character }) {
+  // INIT → 설명(message) + 고정 질문(question) 분리 반환
   if (phase === PHASE.INIT) {
     const message = stripQuestions(reply);
     const question = FORCED_QUESTIONS[character] || FORCED_QUESTIONS['하나'];
     return { message, question };
   }
 
-  // 3. CHAT → 질문 무조건 제거, question = null
+  // CHAT → 질문 무조건 제거, question = null
   if (phase === PHASE.CHAT) {
     return { message: stripQuestions(reply), question: null };
   }
