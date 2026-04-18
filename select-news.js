@@ -7,12 +7,8 @@ const { supabase } = require('./supabase');
 
 loadEnv();
 
-console.log('🔥 select-news 모듈 로드됨:', new Date().toISOString());
-
 const NAVER_ID     = (process.env.NAVER_CLIENT_ID     || '').replace(/[^\x20-\x7E]/g, '');
 const NAVER_SECRET = (process.env.NAVER_CLIENT_SECRET || '').replace(/[^\x20-\x7E]/g, '');
-
-console.log(`[키 확인] NAVER_ID: "${NAVER_ID.slice(0, 5)}..." (길이: ${NAVER_ID.length})`);
 
 const SEARCH_QUERIES = ['속보', '주요뉴스', '경제이슈', '사회이슈', '화제'];
 
@@ -37,12 +33,11 @@ function stripHtml(str) {
     .replace(/&#0*39;/g, "'");
 }
 
-function deduplicateByTitle(items) {
+function deduplicateByUrl(items) {
   const seen = new Set();
   return items.filter(item => {
-    const key = item.title.slice(0, 20);
-    if (seen.has(key)) return false;
-    seen.add(key);
+    if (seen.has(item.link)) return false;
+    seen.add(item.link);
     return true;
   });
 }
@@ -70,34 +65,45 @@ async function main() {
       console.warn(`  [${query}] 수집 실패:`, e.message);
     }
   }
+  console.log(`  총 수집: ${allItems.length}건`);
 
-  // 2. HTML 제거 + 중복 제거 + 필터링
+  // 2. HTML 제거
   const cleaned = allItems.map(item => ({
     title:       stripHtml(item.title),
     description: stripHtml(item.description || ''),
-    pubDate:     item.pubDate,
     link:        item.originallink || item.link,
   }));
-  const unique    = deduplicateByTitle(cleaned);
+
+  // 3. URL 기준 중복 제거 (메모리)
+  const unique = deduplicateByUrl(cleaned);
+
+  // 4. 필터링
   const noSummary = unique.filter(item => !SUMMARY_KEYWORDS.some(kw => item.title.replace(/\s/g, '').includes(kw)));
   const noOpinion = noSummary.filter(item => !OPINION_WORDS.some(w => new RegExp(`\\[[^\\]]*${w}[^\\]]*\\]`).test(item.title)));
-  const noWeak    = noOpinion.filter(item => !WEAK_TITLE_WORDS.find(w => item.title.includes(w)));
-  console.log(`  정제 후: ${noWeak.length}건 (원본 ${allItems.length}건)`);
+  const filtered  = noOpinion.filter(item => !WEAK_TITLE_WORDS.find(w => item.title.includes(w)));
+  console.log(`  필터링 후: ${filtered.length}건 (원본 ${allItems.length}건)`);
 
-  if (noWeak.length === 0) throw new Error('필터링 후 남은 뉴스 없음');
+  if (filtered.length === 0) throw new Error('필터링 후 남은 뉴스 없음');
 
-  // 3. 오늘 기존 rows 삭제 후 새로 저장
-  await supabase.from('news_raw').delete().eq('date', today);
-  const rows = noWeak.map(item => ({
+  // 5. upsert — 중복 URL은 skip
+  const rows = filtered.map(item => ({
     date:        today,
     title:       item.title,
     url:         item.link,
     description: item.description || '',
     processed:   false,
   }));
-  const { error } = await supabase.from('news_raw').insert(rows);
+
+  const { data: inserted, error } = await supabase
+    .from('news_raw')
+    .upsert(rows, { onConflict: 'url', ignoreDuplicates: true })
+    .select();
+
   if (error) throw new Error('news_raw 저장 오류: ' + error.message);
-  console.log(`  news_raw 저장 완료: ${rows.length}건`);
+
+  const insertedCount = inserted ? inserted.length : 0;
+  const skippedCount  = rows.length - insertedCount;
+  console.log(`  insert: ${insertedCount}건 / skip(중복): ${skippedCount}건`);
 
   console.log(`✅ [Stage 1] 완료: ${Date.now() - start}ms`);
 }
