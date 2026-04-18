@@ -4,6 +4,7 @@ const cors = require('cors');
 
 const { getState, updateState } = require('./stateManager');
 const { filterTopic } = require('./topicFilter');
+const { classifyIntent } = require('./intentClassifier');
 const { generateReply, buildSystemPrompt } = require('./generator');
 const { validate } = require('./validator');
 const { buildResponse } = require('./responseBuilder');
@@ -112,6 +113,9 @@ app.post('/chat', async (req, res) => {
     if (phase === 'CHAT') {
       topicStatus = filterTopic(userInput, newsTitle);
     }
+
+    const intent = classifyIntent(userInput);
+    console.log('intent:', intent);
 
     // 3. generator 실행 (말투/스타일만 담당)
     const rawReply = await generateReply({ character, messages, memory, perspectiveStep, phase, primaryCharName, primaryComment, primaryEmotion });
