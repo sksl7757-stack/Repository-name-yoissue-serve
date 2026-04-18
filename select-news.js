@@ -2,8 +2,9 @@
 
 // Stage 1: 수집만 — Naver API 호출 + 필터링 → news_raw 저장 (크롤링 없음)
 
-const { loadEnv } = require('./loadEnv');
-const { supabase } = require('./supabase');
+const { loadEnv }   = require('./loadEnv');
+const { supabase }  = require('./supabase');
+const { stripHtml } = require('./stripHtml');
 
 loadEnv();
 
@@ -35,13 +36,6 @@ async function fetchNaverNews(query) {
   return data.items || [];
 }
 
-function stripHtml(str) {
-  return str
-    .replace(/<[^>]*>/g, '')
-    .replace(/&quot;/g, '"').replace(/&amp;/g, '&')
-    .replace(/&lt;/g, '<').replace(/&gt;/g, '>')
-    .replace(/&#0*39;/g, "'");
-}
 
 function deduplicateByUrl(items) {
   const seen = new Set();

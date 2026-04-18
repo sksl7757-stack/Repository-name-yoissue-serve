@@ -13,6 +13,7 @@ const { calcTimeDecay }    = require('./timeDecay');
 const { loadHistory, saveHistory } = require('./historyStore');
 const { generateEventId }  = require('./eventId');
 const { extractKeywords }  = require('./services/keywordExtractor');
+const { stripHtml }        = require('./stripHtml');
 
 loadEnv();
 
@@ -145,13 +146,6 @@ function makeSummary(content) {
   const result = sentences.slice(0, 3).map(s => s.slice(0, 25));
   while (result.length < 3) result.push('');
   return result;
-}
-
-function stripHtml(str) {
-  return str
-    .replace(/<[^>]*>/g, '')
-    .replace(/&quot;/g, '"').replace(/&amp;/g, '&')
-    .replace(/&lt;/g, '<').replace(/&gt;/g, '>');
 }
 
 // ─── 잡탕 기사 필터 ───────────────────────────────────────────────────────────
