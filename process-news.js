@@ -69,12 +69,12 @@ function pickMemorialNews(memorial, candidates) {
 // ─── 카테고리 ─────────────────────────────────────────────────────────────────
 
 const CATEGORY_RULES = [
-  { name: 'IT',     keywords: ['AI', '인공지능', '반도체', '구글', '삼성전자', '메타', '오픈AI', '챗GPT', '소프트웨어'] },
-  { name: '금융',   keywords: ['금리', '주가', '증시', '코스피', '달러', '환율', '채권', '은행'] },
-  { name: '경제',   keywords: ['경제', '물가', '관세', '무역', '수출', 'GDP', '인플레', '성장률'] },
+  { name: 'IT',     keywords: ['인공지능', '생성형AI', 'AI모델', 'AI칩', 'AI반도체', 'AI서비스', '반도체', '구글', '삼성전자', '메타', '오픈AI', '챗GPT', '소프트웨어'] },
+  { name: '금융',   keywords: ['금리', '주가', '증시', '코스피', '달러', '환율', '채권', '은행', '연준', 'FOMC', '기준금리', '파월', '통화정책'] },
+  { name: '국제',   keywords: ['미국', '중국', '러시아', '유럽', '트럼프', '바이든', '시진핑', '북한'] },
+  { name: '경제',   keywords: ['경제', '물가', '관세', '무역', '수출', 'GDP', '인플레', '성장률', '소매판매', '고용지표', '실업률', '거시경제', '경기침체', '청문회', 'FTA', '자유무역', '무역협정', '재협상'] },
   { name: '부동산', keywords: ['부동산', '아파트', '주택', '전세', '집값', '분양', '임대'] },
   { name: '정치',   keywords: ['국회', '대통령', '여당', '야당', '선거', '탄핵', '의원'] },
-  { name: '국제',   keywords: ['미국', '중국', '러시아', '유럽', '트럼프', '바이든', '시진핑', '북한'] },
   { name: '건강',   keywords: ['의료', '병원', '백신', '바이러스', '코로나', '암', '질병'] },
   { name: '문화',   keywords: ['영화', '음악', '드라마', 'BTS', 'K팝', '아이돌', '공연'] },
   { name: '스포츠', keywords: ['축구', '야구', '농구', '올림픽', '월드컵', '선수', '경기', '리그'] },
@@ -83,12 +83,12 @@ const CATEGORY_RULES = [
 
 const CATEGORY_MAP = [
   { name: '추모',   keywords: ['세월호', '이태원', '5·18', '5.18', '4·3', '광주민주화', '광주항쟁'] },
-  { name: 'IT',     keywords: ['AI', '인공지능', '반도체', '빅테크', '구글', '삼성전자', '메타', '오픈AI', '챗GPT', '소프트웨어', '스타트업'] },
-  { name: '금융',   keywords: ['금리', '주가', '증시', '코스피', '코스닥', '달러', '환율', '채권', '은행', '금융'] },
-  { name: '경제',   keywords: ['경제', '물가', '관세', '무역', '수출', '수입', 'GDP', '인플레', '성장률', '소비자'] },
+  { name: 'IT',     keywords: ['인공지능', '생성형AI', 'AI모델', 'AI칩', 'AI반도체', 'AI서비스', '반도체', '빅테크', '구글', '삼성전자', '메타', '오픈AI', '챗GPT', '소프트웨어', '스타트업'] },
+  { name: '금융',   keywords: ['금리', '주가', '증시', '코스피', '코스닥', '달러', '환율', '채권', '은행', '금융', '연준', 'FOMC', '기준금리', '파월', '통화정책'] },
+  { name: '국제',   keywords: ['미국', '중국', '러시아', '유럽', '이란', '트럼프', '바이든', '시진핑', '푸틴', '북한'] },
+  { name: '경제',   keywords: ['경제', '물가', '관세', '무역', '수출', '수입', 'GDP', '인플레', '성장률', '소비자', '소매판매', '고용지표', '실업률', '거시경제', '경기침체', '청문회', 'FTA', '자유무역', '무역협정', '재협상'] },
   { name: '부동산', keywords: ['부동산', '아파트', '주택', '전세', '집값', '분양', '임대'] },
   { name: '정치',   keywords: ['국회', '대통령', '여당', '야당', '선거', '정당', '탄핵', '의원', '정치'] },
-  { name: '국제',   keywords: ['미국', '중국', '러시아', '유럽', '이란', '트럼프', '바이든', '시진핑', '푸틴', '북한'] },
   { name: '건강',   keywords: ['의료', '건강', '병원', '백신', '바이러스', '코로나', '암', '질병'] },
   { name: '환경',   keywords: ['기후', '탄소', '환경', '에너지', '원전', '태양광'] },
   { name: '문화',   keywords: ['영화', '음악', '드라마', '문화', '예술', '공연'] },
@@ -114,10 +114,16 @@ const DOMAIN_SOURCE = {
 
 function inferTag(item) {
   const text = item.title + ' ' + (item.content || '');
-  for (const { name, keywords } of CATEGORY_MAP) {
-    if (keywords.some(k => text.includes(k))) return `오늘의 픽 · ${name}`;
-  }
-  return '오늘의 픽 · 사회';
+  let best = { name: '사회', count: 0, index: 999 };
+
+  CATEGORY_MAP.forEach((cat, index) => {
+    const count = cat.keywords.filter(k => text.includes(k)).length;
+    if (count > best.count || (count === best.count && count > 0 && index < best.index)) {
+      best = { name: cat.name, count, index };
+    }
+  });
+
+  return `오늘의 픽 · ${best.name}`;
 }
 
 function inferEmoji(tag) {
@@ -561,7 +567,7 @@ async function markAllProcessed(rows) {
   }
 }
 
-module.exports = { main };
+module.exports = { main, inferTag, CATEGORY_MAP };
 
 if (require.main === module) {
   main().catch(e => { console.error(e); process.exit(1); });
