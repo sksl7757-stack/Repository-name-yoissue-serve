@@ -46,7 +46,35 @@ function deduplicateByUrl(items) {
   });
 }
 
-const SUMMARY_KEYWORDS = ['이슈종합', '뉴스종합', '뉴스브리핑', '오늘의뉴스', '주요뉴스종합', '헤드라인종합'];
+const SUMMARY_KEYWORDS = [
+  // 기존
+  '이슈종합', '뉴스종합', '뉴스브리핑', '오늘의뉴스', '주요뉴스종합', '헤드라인종합',
+  // 묶음 기사 패턴
+  '위클리PICK', '주간PICK', '주간이슈', '이주의이슈', '한눈에',
+  'TOP5', 'TOP3', 'TOP10',
+  '핫이슈모음', '이슈모아', '모아보기',
+  // 방송사·통신사 뉴스 종합 포맷 ("BBC도 주요 뉴스로 전한 늑구" 오탐 방지 — 좁은 패턴만)
+  '이시각주요뉴스', '오늘의주요뉴스', '뉴스센터주요뉴스',
+  // 뉴스레터/바이트 형식
+  '뉴스바이트', '뉴스레터',
+  // 언론사 사설 종합 (미디어오늘 류)
+  '사설종합', '언론사설', '오늘의사설',
+];
+
+// 언론 비평·큐레이션 전문 매체 — 단독 뉴스 소스로 부적합
+const BLOCKED_DOMAINS = [
+  'mediatoday.co.kr',  // 미디어오늘
+  'mediawatch.kr',     // 미디어워치
+];
+
+function isBlockedDomain(link) {
+  try {
+    const hostname = new URL(link).hostname.replace(/^www\./, '');
+    return BLOCKED_DOMAINS.some(d => hostname.includes(d));
+  } catch {
+    return false;
+  }
+}
 
 const OPINION_WORDS = [
   '칼럼', '사설', '오피니언', '기고', '포럼', '시론', '논평',
@@ -71,15 +99,56 @@ function getQueryKey(query) {
   return query;
 }
 
-function scoreImpactTitle(title) {
+// 주요 전국 매체 — 소스 가중치 1.0
+const MAJOR_SOURCES = [
+  // 통신사
+  'yna.co.kr', 'yonhapnewstv.co.kr', 'newsis.com', 'news1.kr',
+  // 방송
+  'ytn.co.kr', 'kbs.co.kr', 'mbc.co.kr', 'sbs.co.kr',
+  'jtbc.co.kr', 'tvchosun.com', 'mbn.co.kr', 'ichannela.com',
+  // 일간지
+  'chosun.com', 'joins.com', 'joongang.co.kr',
+  'donga.com', 'hani.co.kr', 'khan.co.kr',
+  'hankookilbo.com', 'kmib.co.kr', 'segye.com', 'munhwa.com',
+  // 경제지
+  'hankyung.com', 'mk.co.kr', 'sedaily.com',
+  'edaily.co.kr', 'mt.co.kr', 'fnnews.com', 'asiae.co.kr',
+  // 기타 전국 매체
+  'nocutnews.co.kr', 'ohmynews.com', 'pressian.com', 'heraldcorp.com',
+];
+
+function getSourceWeight(url) {
+  if (!url) return 0.7;
+  try {
+    const hostname = new URL(url).hostname.replace(/^www\./, '');
+    if (MAJOR_SOURCES.some(d => hostname.includes(d))) return 1.0;
+    return 0.6; // 지방지/소규모 매체
+  } catch {
+    return 0.7;
+  }
+}
+
+function scoreImpactTitle(title, url) {
   let score = 0;
-  const STRONG_KEYWORDS    = ['금리', '환율', '관세', '반도체', 'AI', '인공지능', '대통령', '전쟁', '경제', '물가', '수출'];
+  const STRONG_KEYWORDS    = [
+    // 경제
+    '금리', '환율', '관세', '반도체', 'AI', '인공지능', '경제', '물가', '수출',
+    // 국제 정세
+    '트럼프', '푸틴', '시진핑', '이란', '북한', '러시아', '중동', '전쟁', '핵실험', '미사일',
+    // 정치
+    '대통령', '탄핵', '총선', '개각',
+    // 재해/사고
+    '사망', '참사', '붕괴',
+  ];
   const IMPORTANT_ENTITIES = ['삼성', '애플', '구글', '정부', '미국', '중국'];
   const CHANGE_WORDS       = ['상승', '하락', '급등', '급락', '충격', '위기'];
-  for (const k of STRONG_KEYWORDS)    if (title.includes(k)) score += 2;
+
+  // STRONG_KEYWORDS 2→1 감경 (지자체 보도자료 과대평가 방지)
+  for (const k of STRONG_KEYWORDS)    if (title.includes(k)) score += 1;
   for (const e of IMPORTANT_ENTITIES) if (title.includes(e)) score += 1;
   for (const c of CHANGE_WORDS)       if (title.includes(c)) score += 1;
-  return score;
+
+  return score * getSourceWeight(url);
 }
 
 async function main() {
@@ -108,6 +177,7 @@ async function main() {
         const link        = raw.originallink || raw.link;
 
         if (SUMMARY_KEYWORDS.some(kw => title.replace(/\s/g, '').includes(kw))) continue;
+        if (isBlockedDomain(link)) continue;
         if (isOpinion(title)) continue;
         if (isWeakNews(title)) continue;
 
@@ -136,7 +206,7 @@ async function main() {
   finalItems = finalItems.slice(0, MAX_TOTAL);
 
   // 2-1. impact 계산 + 최소 컷 + 30개 제한
-  const scored = finalItems.map(item => ({ ...item, impact: scoreImpactTitle(item.title) }));
+  const scored = finalItems.map(item => ({ ...item, impact: scoreImpactTitle(item.title, item.link) }));
   const MIN_IMPACT = 1;
   let selected30 = scored.filter(item => item.impact >= MIN_IMPACT);
   if (selected30.length > 30) {
@@ -180,7 +250,7 @@ async function main() {
   console.log(`✅ [Stage 1] 완료: ${Date.now() - start}ms`);
 }
 
-module.exports = { main };
+module.exports = { main, scoreImpactTitle };
 
 if (require.main === module) {
   main().catch(e => { console.error(e); process.exit(1); });

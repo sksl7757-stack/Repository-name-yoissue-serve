@@ -232,6 +232,54 @@ async function fetchFullTitle(url, fallback) {
   }
 }
 
+function stripStyleAndScript(html) {
+  return html
+    .replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi, '')
+    .replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, '')
+    .replace(/<!--[\s\S]*?-->/g, '');
+}
+
+// 크롤링 결과가 실제 뉴스 본문이 아닌 안내/경고문인지 판별
+function isInvalidContent(text) {
+  if (!text || text.length < 30) return true;
+
+  const head = text.slice(0, 300); // 앞부분만 검사 (본문은 보통 정상 문장으로 시작)
+
+  const INVALID_PATTERNS = [
+    // 브라우저 경고
+    /Internet Explorer/i,
+    /브라우저를?\s*업(데이트|그레이드)/,
+    /최신\s*브라우저/,
+    /크롬.*다운로드/i,
+    /Chrome.*download/i,
+
+    // 페이월/로그인 요구
+    /로그인\s*(후|하면|하고)\s*(이용|열람|확인|보실)/,
+    /회원\s*가입\s*(후|하면|하고)/,
+    /유료\s*(기사|콘텐츠|구독)/,
+    /구독(자|회원).*이용/,
+
+    // CSS/JS 코드 잔재
+    /#[\w-]+\s*\{/,
+    /\.[\w-]+\s*\{[^}]*:/,
+    /\{\s*(position|overflow|margin|padding|display|color|font)\s*:/,
+    /<script[\s>]/i,
+    /window\.\w+\s*=/,
+
+    // 신문사 푸터/저작권 정보
+    /제호\s*[:：]/,
+    /등록번호\s*[:：]/,
+    /발행인\s*[·,]?\s*편집인/,
+    /발행일자/,
+    /Copyright.{0,30}All\s*rights?\s*reserved/i,
+    /무단\s*(전재|복제|배포)/,
+    /ⓒ\s*[\w가-힣]+(일보|신문|방송|뉴스)/,
+    /대표전화\s*[:：]?\s*\d/,
+  ];
+
+  return INVALID_PATTERNS.some(p => p.test(head));
+}
+
 async function fetchArticleContent(url) {
   try {
     const controller = new AbortController();
@@ -239,7 +287,8 @@ async function fetchArticleContent(url) {
     const res = await fetch(url, { signal: controller.signal, headers: { 'User-Agent': 'Mozilla/5.0' } });
     clearTimeout(timer);
     if (!res.ok) return null;
-    const html = await res.text();
+    const rawHtml = await res.text();
+    const html = stripStyleAndScript(rawHtml);
 
     // 1. <p> 본문 파싱 + 품질 체크
     const paragraphs = [...html.matchAll(/<p[^>]*>([\s\S]*?)<\/p>/gi)]
@@ -248,7 +297,7 @@ async function fetchArticleContent(url) {
       .join(' ');
     if (paragraphs.length > 0) {
       const pResult = paragraphs.slice(0, 1000);
-      if (!isMixedContent({ title: '', content: pResult }).filtered) return pResult;
+      if (!isInvalidContent(pResult) && !isMixedContent({ title: '', content: pResult }).filtered) return pResult;
     }
 
     // 2. div 본문 클래스 한정 파싱 + 품질 체크
@@ -259,13 +308,16 @@ async function fetchArticleContent(url) {
       .join(' ');
     if (divContent.length > 150) {
       const dResult = divContent.slice(0, 1000);
-      if (!isMixedContent({ title: '', content: dResult }).filtered) return dResult;
+      if (!isInvalidContent(dResult) && !isMixedContent({ title: '', content: dResult }).filtered) return dResult;
     }
 
     // 3. og:description fallback
-    const ogMatch = html.match(/<meta[^>]+property=["']og:description["'][^>]+content=["']([^"']+)["']/i)
-      || html.match(/<meta[^>]+content=["']([^"']+)["'][^>]+property=["']og:description["']/i);
-    if (ogMatch) return ogMatch[1].trim().slice(0, 1000);
+    const ogMatch = rawHtml.match(/<meta[^>]+property=["']og:description["'][^>]+content=["']([^"']+)["']/i)
+      || rawHtml.match(/<meta[^>]+content=["']([^"']+)["'][^>]+property=["']og:description["']/i);
+    if (ogMatch) {
+      const ogText = ogMatch[1].trim().slice(0, 1000);
+      if (!isInvalidContent(ogText)) return ogText;
+    }
 
     return null;
   } catch {
