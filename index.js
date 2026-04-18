@@ -224,17 +224,6 @@ app.post('/send-notifications', async (req, res) => {
   }
 });
 
-app.post('/today-news', async (req, res) => {
-  console.log('body:', req.body);
-  try {
-    const news = await getTodayNews();
-    if (!news) return res.status(404).json({ error: '오늘 뉴스가 없습니다.' });
-    res.json(news);
-  } catch (e) {
-    console.log('today-news 에러:', e.message);
-    res.status(500).json({ error: e.message });
-  }
-});
 
 app.post('/save-news', async (req, res) => {
   const { userId, newsId } = req.body;
@@ -280,10 +269,6 @@ app.get('/records', async (req, res) => {
   }
 });
 
-app.post('/today-news-test', (req, res) => {
-  console.log('test route body:', req.body);
-  res.json({ ok: true, message: 'test success' });
-});
 
 // ── /generate-image ──────────────────────────────────────────────────────────
 // body: { category, emotion, character, newsTitle }

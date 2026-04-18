@@ -29,7 +29,11 @@ function loadHistory() {
  */
 function saveHistory(history, entry) {
   const updated = [entry, ...history].slice(0, MAX_HISTORY);
-  fs.writeFileSync(HISTORY_PATH, JSON.stringify(updated, null, 2), 'utf8');
+  try {
+    fs.writeFileSync(HISTORY_PATH, JSON.stringify(updated, null, 2), 'utf8');
+  } catch (err) {
+    console.error('history save failed:', err.message);
+  }
 }
 
 module.exports = { loadHistory, saveHistory };

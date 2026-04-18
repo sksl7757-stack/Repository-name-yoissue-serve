@@ -3,9 +3,13 @@
     { "source": "/(.*)", "destination": "/api/index" }
   ],
   "crons": [
-    { "path": "/api/select-news", "schedule": "0 23 * * *" }
+    { "path": "/api/select-news",  "schedule": "0 22 * * *" },
+    { "path": "/api/process-news", "schedule": "0 23 * * *" },
+    { "path": "/api/send-push",    "schedule": "5 23 * * *" }
   ],
   "functions": {
-    "api/select-news.js": { "maxDuration": 300 }
+    "api/select-news.js":  { "maxDuration": 300 },
+    "api/process-news.js": { "maxDuration": 300 },
+    "api/send-push.js":    { "maxDuration": 60 }
   }
 }
