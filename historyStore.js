@@ -28,8 +28,4 @@ async function loadHistory() {
   }
 }
 
-function saveHistory(_history, _entry) {
-  // daily_news upsert에서 이미 저장됨 — 별도 저장 불필요
-}
-
-module.exports = { loadHistory, saveHistory };
+module.exports = { loadHistory };

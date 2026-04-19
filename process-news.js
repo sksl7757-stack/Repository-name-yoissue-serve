@@ -4,7 +4,7 @@
 
 const { loadEnv }          = require('./loadEnv');
 const { supabase }         = require('./supabase');
-const { loadHistory, saveHistory } = require('./historyStore');
+const { loadHistory } = require('./historyStore');
 const { stripHtml }        = require('./stripHtml');
 
 loadEnv();
@@ -592,14 +592,6 @@ async function main() {
   if (dailyErr) console.error('  daily_news 저장 오류:', dailyErr.message);
   else console.log('  daily_news 저장 완료');
 
-  // 10. 이력 저장
-  saveHistory(history, {
-    title:     best.title,
-    content:   (best.content || '').slice(0, 500),
-    timestamp: new Date().toISOString(),
-    eventId:   selected.eventId || '',
-  });
-  console.log('  이력 저장 완료');
 
   // 11. news_raw 전체 처리 완료 표시
   await markAllProcessed(rawRows);
