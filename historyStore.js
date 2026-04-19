@@ -1,40 +1,35 @@
 'use strict';
 
-// 선택된 뉴스 이력 저장 및 조회
-// news-history.json 에 최근 30건을 보관
+const { supabase } = require('./supabase');
 
-const fs   = require('fs');
-const path = require('path');
-const os   = require('os');
+const MAX_HISTORY = 30;
 
-const HISTORY_PATH = path.join(os.tmpdir(), 'news-history.json');
-const MAX_HISTORY  = 30;
-
-/**
- * 저장된 선택 이력을 불러온다
- * @returns {Array} [{ title, content, timestamp }, ...]
- */
-function loadHistory() {
+async function loadHistory() {
   try {
-    if (!fs.existsSync(HISTORY_PATH)) return [];
-    return JSON.parse(fs.readFileSync(HISTORY_PATH, 'utf8'));
-  } catch {
+    const { data, error } = await supabase
+      .from('daily_news')
+      .select('title, content, date')
+      .order('date', { ascending: false })
+      .limit(MAX_HISTORY);
+
+    if (error) {
+      console.warn('  [history] Supabase 조회 실패:', error.message);
+      return [];
+    }
+
+    return (data || []).map(row => ({
+      title:     row.title || '',
+      content:   (row.content || '').slice(0, 500),
+      timestamp: row.date,
+    }));
+  } catch (err) {
+    console.warn('  [history] loadHistory 오류:', err.message);
     return [];
   }
 }
 
-/**
- * 새 선택 결과를 이력에 추가하고 저장한다
- * @param {Array}  history  - loadHistory() 로 불러온 기존 이력
- * @param {object} entry    - { title, content, timestamp, eventId }
- */
-function saveHistory(history, entry) {
-  const updated = [entry, ...history].slice(0, MAX_HISTORY);
-  try {
-    fs.writeFileSync(HISTORY_PATH, JSON.stringify(updated, null, 2), 'utf8');
-  } catch (err) {
-    console.error('history save failed:', err.message);
-  }
+function saveHistory(_history, _entry) {
+  // daily_news upsert에서 이미 저장됨 — 별도 저장 불필요
 }
 
 module.exports = { loadHistory, saveHistory };

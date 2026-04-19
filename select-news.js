@@ -12,15 +12,16 @@ const NAVER_ID     = (process.env.NAVER_CLIENT_ID     || '').replace(/[^\x20-\x7
 const NAVER_SECRET = (process.env.NAVER_CLIENT_SECRET || '').replace(/[^\x20-\x7E]/g, '');
 
 const QUERY_CONFIG = {
-  '속보':    8,
-  '주요뉴스': 8,
-  '경제이슈': 7,
-  '사회이슈': 7,
-  '화제':    6,
-  '경제':    3,
-  '산업':    3,
-  '기업':    3,
-  '기술':    3,
+  '속보':     8,   // 긴급 이슈
+  '외교':     6,   // 국제/외교
+  '안보':     6,   // 안보/군사
+  '정치':     6,   // 국내 정치
+  '경제':     5,   // 경제 전반
+  '금융':     5,   // 금융 시장
+  '환율금리': 5,   // 환율/금리
+  '관세':     4,   // 무역/관세
+  '기업':     5,   // 기업 이슈
+  '부동산':   4,   // 부동산
 };
 
 async function fetchNaverNews(query) {
