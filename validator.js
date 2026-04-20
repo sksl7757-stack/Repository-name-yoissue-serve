@@ -13,12 +13,19 @@ const FORCED_QUESTIONS = {
  * '?'로 끝나는 문장을 모두 제거하고 남은 텍스트 반환.
  * 빈 결과가 되면 원본 반환(안전장치).
  */
+// 긴 질문(20자 초과 + '?' 끝)만 제거. 짧은 수사적 의문("무섭지 않아?", "느낌?")은 페르소나 말투라 보존.
 function stripQuestions(text) {
   const lines = text.split('\n');
   const cleaned = lines
     .map(line => {
       const sentences = line.split(/(?<=[.!?])\s+/);
-      return sentences.filter(s => !s.trim().endsWith('?')).join(' ').trim();
+      return sentences
+        .filter(s => {
+          const t = s.trim();
+          return !(t.endsWith('?') && t.length > 20);
+        })
+        .join(' ')
+        .trim();
     })
     .filter(l => l.length > 0);
   return cleaned.length > 0 ? cleaned.join('\n').trim() : text.trim();
