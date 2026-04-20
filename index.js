@@ -1,4 +1,8 @@
-require('dotenv').config({ path: __dirname + '/.env' });
+// Railway 환경에서는 process.env 직접 사용, 로컬에서만 .env 로드
+const fs = require('fs');
+if (fs.existsSync(__dirname + '/.env')) {
+  require('dotenv').config({ path: __dirname + '/.env' });
+}
 const express = require('express');
 const cors = require('cors');
 
