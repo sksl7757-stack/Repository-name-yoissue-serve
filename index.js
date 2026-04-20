@@ -273,7 +273,9 @@ app.post('/chat', async (req, res) => {
 
     const firstValidated = validate({ reply: firstText, phase, character: first });
     console.log('first reply:', firstValidated.message?.slice(0, 80));
-    sse('turn_end', { character: first, message: firstValidated.message, emotion: firstEmotion || 'neutral' });
+    const OFF_TOPIC_PATTERNS = ['오늘 뉴스 얘기', '오늘 주제 아님', '그건 내가 답하기', '뉴스 관련 얘기만', '다른 얘기는'];
+    const firstOffTopic = OFF_TOPIC_PATTERNS.some(p => firstValidated.message?.includes(p));
+    sse('turn_end', { character: first, message: firstValidated.message, emotion: firstEmotion || 'neutral', offTopic: firstOffTopic });
 
     // 두 번째 캐릭터 스트리밍
     if (second) {
