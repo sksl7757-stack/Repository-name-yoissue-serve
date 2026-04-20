@@ -257,9 +257,12 @@ app.post('/chat', async (req, res) => {
     const { first, second } = await decideResponders(messages, primaryChar, secondaryChar, emotionContext);
     const { phase, questionAsked } = getState(messages, perspectiveStep);
 
+    const firstEmotion  = first  === primaryChar ? characterEmotion : (secondaryEmotion || (characterEmotion === 'positive' ? 'negative' : 'positive'));
+    const secondEmotion = second === primaryChar ? characterEmotion : (secondaryEmotion || (characterEmotion === 'positive' ? 'negative' : 'positive'));
+
     // 첫 번째 캐릭터 스트리밍
-    console.log('[stance-in]', first, '→', characterEmotion);
-    const firstSystemPrompt = await buildSystemPrompt(first, memory, { perspectiveStep, phase, primaryCharName: null, primaryComment: null, primaryEmotion: null, messages, characterEmotion });
+    console.log('[stance-in]', first, '→', firstEmotion);
+    const firstSystemPrompt = await buildSystemPrompt(first, memory, { perspectiveStep, phase, primaryCharName: null, primaryComment: null, primaryEmotion: null, messages, characterEmotion: firstEmotion });
 
     sse('turn_start', { character: first });
     let firstText = '';
@@ -270,16 +273,15 @@ app.post('/chat', async (req, res) => {
 
     const firstValidated = validate({ reply: firstText, phase, character: first });
     console.log('first reply:', firstValidated.message?.slice(0, 80));
-    sse('turn_end', { character: first, message: firstValidated.message, emotion: characterEmotion || 'neutral' });
+    sse('turn_end', { character: first, message: firstValidated.message, emotion: firstEmotion || 'neutral' });
 
     // 두 번째 캐릭터 스트리밍
     if (second) {
-      console.log('[emotion]', 'primary:', characterEmotion, '| secondary:', secondaryEmotion);
-      const secondCharEmotion = secondaryEmotion || (characterEmotion === 'positive' ? 'negative' : 'positive');
+      console.log('[emotion]', 'primary:', characterEmotion, '| secondary:', secondaryEmotion, '| secondEmotion:', secondEmotion);
       await new Promise(r => setTimeout(r, 600));
       console.log('[second-char]', second, '| primaryComment:', firstValidated.message?.slice(0, 30));
 
-      const secondSystemPrompt = await buildSystemPrompt(second, memory, { perspectiveStep, phase, primaryCharName: first, primaryComment: firstValidated.message, primaryEmotion: characterEmotion, messages, characterEmotion: secondCharEmotion });
+      const secondSystemPrompt = await buildSystemPrompt(second, memory, { perspectiveStep, phase, primaryCharName: first, primaryComment: firstValidated.message, primaryEmotion: firstEmotion, messages, characterEmotion: secondEmotion });
 
       sse('turn_start', { character: second });
       let secondText = '';
@@ -290,7 +292,7 @@ app.post('/chat', async (req, res) => {
 
       const secondValidated = validate({ reply: secondText, phase, character: second });
       console.log('second reply:', secondValidated.message?.slice(0, 80));
-      sse('turn_end', { character: second, message: secondValidated.message, emotion: secondCharEmotion || 'neutral' });
+      sse('turn_end', { character: second, message: secondValidated.message, emotion: secondEmotion || 'neutral' });
     }
 
     const updatedState = updateState({ phase, questionAsked }, { questionAsked: !!firstValidated.question });
