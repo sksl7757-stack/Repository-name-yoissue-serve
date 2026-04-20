@@ -268,4 +268,46 @@ async function generateReply({ character, messages, memory, perspectiveStep = 0,
   return { text, emotion };
 }
 
-module.exports = { generateReply, buildSystemPrompt, isOpinionRequest };
+async function generateReplyStream(systemPrompt, messages) {
+  const OPENAI_KEY = process.env.OPENAI_API_KEY?.replace(/['"]/g, '');
+  const response = await fetch('https://api.openai.com/v1/chat/completions', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${OPENAI_KEY}`,
+    },
+    body: JSON.stringify({
+      model: 'gpt-4o-mini',
+      max_tokens: 350,
+      stream: true,
+      messages: [
+        { role: 'system', content: systemPrompt + '\n\n캐릭터 대화문만 출력해. JSON 형식 불필요.' },
+        ...messages,
+      ],
+    }),
+  });
+  return response.body;
+}
+
+async function* parseOpenAIStream(body) {
+  const reader = body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    const lines = buffer.split('\n');
+    buffer = lines.pop() || '';
+
+    for (const line of lines) {
+      if (!line.startsWith('data: ')) continue;
+      const jsonStr = line.slice(6).trim();
+      if (jsonStr === '[DONE]') return;
+      try { yield JSON.parse(jsonStr); } catch {}
+    }
+  }
+}
+
+module.exports = { generateReply, generateReplyStream, parseOpenAIStream, buildSystemPrompt, isOpinionRequest };

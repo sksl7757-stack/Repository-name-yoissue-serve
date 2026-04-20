@@ -7,7 +7,7 @@ const express = require('express');
 const cors = require('cors');
 
 const { getState, updateState } = require('./stateManager');
-const { generateReply, buildSystemPrompt } = require('./generator');
+const { generateReply, generateReplyStream, parseOpenAIStream, buildSystemPrompt } = require('./generator');
 const { validate } = require('./validator');
 
 const { saveNews, getSavedNews } = require('./saveNews');
@@ -130,6 +130,14 @@ async function decideResponders(messages, primaryChar, secondaryChar, emotionCon
 → 반대 캐릭터만 단독 반응 (second: "null")
 유저가 캐릭터 언급 없이 의견 표현 → 둘 다
 
+후속 질문 판단 규칙:
+유저가 "뭔데?", "왜?", "어떻게?", "그게 뭐야?" 같은 질문을 할 때,
+최근 대화 맥락에서 그 키워드(예: "리스크", "기회", "위험")를
+어느 캐릭터가 먼저 언급했는지 찾아서 그 캐릭터가 단독으로 답한다.
+예시:
+- 준혁이 "리스크가 크다"고 했고 → 유저가 "리스크가 뭔데?" → 준혁 단독
+- 하나가 "기회가 될 것 같아"라고 했고 → 유저가 "어떤 기회야?" → 하나 단독
+
 결정 규칙:
 1. 사실 확인 질문 (뭐야? 이게 맞아? 왜 그래?) → second: "null", first: ${primaryChar}
 2. 특정 시점과 관련된 질문 (긍정적인 게 뭐야? 왜 좋다고 봐?) → 그 시점 캐릭터 단독
@@ -183,69 +191,93 @@ async function decideResponders(messages, primaryChar, secondaryChar, emotionCon
   return { first: primaryChar, second: null };
 }
 
-// /chat — harness orchestration
+// /chat — SSE 스트리밍
 app.post('/chat', async (req, res) => {
+  res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache');
+  res.setHeader('Connection', 'keep-alive');
+
+  const sse = (event, data) => res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+
   const { type, messages, character, memory, perspectiveStep = 0, characterEmotion = null, secondaryEmotion = null, secondaryChar: reqSecondaryChar = null } = req.body;
+
   try {
-    // PERSPECTIVE_NEXT: 시스템 트리거 — topic 검사 없이 바로 생성
+    // ── PERSPECTIVE_NEXT ────────────────────────────────────────────────────────
     if (type === 'PERSPECTIVE_NEXT') {
       if (perspectiveStep > 2) {
-        return res.json({
-          turns: [{
-            character,
-            message: character === '하나'
-              ? '나 이 얘기는 여기까지면 충분한 것 같아 🌸 내일 또 같이 보자'
-              : '이 정도면 핵심은 다 봤어. 내일 다시 보자',
-            emotion: 'neutral',
-          }],
-          question: null,
-          end: true,
+        sse('turn_end', {
+          character,
+          message: character === '하나'
+            ? '나 이 얘기는 여기까지면 충분한 것 같아 🌸 내일 또 같이 보자'
+            : '이 정도면 핵심은 다 봤어. 내일 다시 보자',
+          emotion: 'neutral',
         });
+        sse('done', { end: true });
+        res.end();
+        return;
       }
       console.log('[stance-in]', character, '→', characterEmotion);
-      const rawReply      = await generateReply({ character, messages, memory, perspectiveStep, isPerspectiveRequest: true, characterEmotion });
+      const rawReply       = await generateReply({ character, messages, memory, perspectiveStep, isPerspectiveRequest: true, characterEmotion });
       const validatedReply = validate({ reply: rawReply.text, phase: 'CHAT', character });
-      return res.json({
-        turns:    [{ character, message: validatedReply.message, emotion: rawReply.emotion }],
-        question: validatedReply.question,
-      });
+      sse('turn_end', { character, message: validatedReply.message, emotion: rawReply.emotion });
+      sse('question',  { question: validatedReply.question || null });
+      sse('done',      { end: false });
+      res.end();
+      return;
     }
 
-    // 1. 응답 캐릭터 결정
-    const primaryChar   = character;
-    const secondaryChar = reqSecondaryChar || (character === '하나' ? '준혁' : '하나');
+    // ── 일반 채팅 ──────────────────────────────────────────────────────────────
+    const primaryChar    = character;
+    const secondaryChar  = reqSecondaryChar || (character === '하나' ? '준혁' : '하나');
     const emotionContext = { primary: characterEmotion, secondary: secondaryEmotion };
     const { first, second } = await decideResponders(messages, primaryChar, secondaryChar, emotionContext);
-
-    // 2. state 읽기
     const { phase, questionAsked } = getState(messages, perspectiveStep);
 
-    // 3. 첫 번째 캐릭터 호출
+    // 첫 번째 캐릭터 스트리밍
     console.log('[stance-in]', first, '→', characterEmotion);
-    const firstRaw       = await generateReply({ character: first, messages, memory, perspectiveStep, phase, primaryCharName: null, primaryComment: null, primaryEmotion: null, characterEmotion });
-    const firstValidated = validate({ reply: firstRaw.text, phase, character: first });
-    console.log('first reply:', firstValidated.message?.slice(0, 80));
+    const firstSystemPrompt = await buildSystemPrompt(first, memory, { perspectiveStep, phase, primaryCharName: null, primaryComment: null, primaryEmotion: null, messages, characterEmotion });
 
-    const turns = [{ character: first, message: firstValidated.message, emotion: firstRaw.emotion }];
-
-    // 4. 두 번째 캐릭터 호출 (첫 번째 응답에 반응)
-    if (second) {
-      console.log('[second-char]', second, '| primaryCharName:', first, '| primaryComment:', firstValidated.message?.slice(0, 30));
-      console.log('[stance-in]', second, '→ reacting to', first);
-      const secondRaw       = await generateReply({ character: second, messages, memory, perspectiveStep, phase, primaryCharName: first, primaryComment: firstValidated.message, primaryEmotion: firstRaw.emotion, characterEmotion });
-      const secondValidated = validate({ reply: secondRaw.text, phase, character: second });
-      console.log('second reply:', secondValidated.message?.slice(0, 80));
-      turns.push({ character: second, message: secondValidated.message, emotion: secondRaw.emotion });
+    sse('turn_start', { character: first });
+    let firstText = '';
+    for await (const chunk of parseOpenAIStream(await generateReplyStream(firstSystemPrompt, messages))) {
+      const token = chunk.choices?.[0]?.delta?.content || '';
+      if (token) { firstText += token; sse('token', { character: first, token }); }
     }
 
-    // 5. state 업데이트 (로깅용)
+    const firstValidated = validate({ reply: firstText, phase, character: first });
+    console.log('first reply:', firstValidated.message?.slice(0, 80));
+    sse('turn_end', { character: first, message: firstValidated.message, emotion: characterEmotion || 'neutral' });
+
+    // 두 번째 캐릭터 스트리밍
+    if (second) {
+      await new Promise(r => setTimeout(r, 600));
+      console.log('[second-char]', second, '| primaryComment:', firstValidated.message?.slice(0, 30));
+
+      const secondSystemPrompt = await buildSystemPrompt(second, memory, { perspectiveStep, phase, primaryCharName: first, primaryComment: firstValidated.message, primaryEmotion: characterEmotion, messages, characterEmotion });
+
+      sse('turn_start', { character: second });
+      let secondText = '';
+      for await (const chunk of parseOpenAIStream(await generateReplyStream(secondSystemPrompt, messages))) {
+        const token = chunk.choices?.[0]?.delta?.content || '';
+        if (token) { secondText += token; sse('token', { character: second, token }); }
+      }
+
+      const secondValidated = validate({ reply: secondText, phase, character: second });
+      console.log('second reply:', secondValidated.message?.slice(0, 80));
+      sse('turn_end', { character: second, message: secondValidated.message, emotion: secondaryEmotion || 'neutral' });
+    }
+
     const updatedState = updateState({ phase, questionAsked }, { questionAsked: !!firstValidated.question });
     console.log('state:', updatedState);
 
-    res.json({ turns, question: firstValidated.question });
+    sse('question', { question: firstValidated.question || null });
+    sse('done',     { end: false });
+    res.end();
+
   } catch (e) {
     console.log('chat 에러:', e.message);
-    res.status(500).json({ error: e.message });
+    sse('error', { message: e.message });
+    res.end();
   }
 });
 
