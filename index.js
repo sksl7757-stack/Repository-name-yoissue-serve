@@ -172,7 +172,7 @@ async function decideResponders(messages, primaryChar, secondaryChar, emotionCon
 
 // /chat — harness orchestration
 app.post('/chat', async (req, res) => {
-  const { type, messages, character, memory, perspectiveStep = 0, characterEmotion = null, secondaryEmotion = null } = req.body;
+  const { type, messages, character, memory, perspectiveStep = 0, characterEmotion = null, secondaryEmotion = null, secondaryChar: reqSecondaryChar = null } = req.body;
   try {
     // PERSPECTIVE_NEXT: 시스템 트리거 — topic 검사 없이 바로 생성
     if (type === 'PERSPECTIVE_NEXT') {
@@ -200,7 +200,7 @@ app.post('/chat', async (req, res) => {
 
     // 1. 응답 캐릭터 결정
     const primaryChar   = character;
-    const secondaryChar = character === '하나' ? '준혁' : '하나';
+    const secondaryChar = reqSecondaryChar || (character === '하나' ? '준혁' : '하나');
     const emotionContext = { primary: characterEmotion, secondary: secondaryEmotion };
     const { first, second } = await decideResponders(messages, primaryChar, secondaryChar, emotionContext);
 

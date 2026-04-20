@@ -1,24 +1,23 @@
 // generator.js — 순수 생성기.
 // 캐릭터 말투와 스타일만 담당. 질문 여부 / 주제 판단 로직 없음 — 모두 validator 책임.
 
+const fs   = require('fs');
+const path = require('path');
 const { getTodayNews } = require('./supabase');
-const { hanaPrompt, hanaCorePersona, hanaConversePrompt }       = require('./persona/hana/prompt');
-const { junhyukPrompt, junhyukCorePersona, junhyukConversePrompt } = require('./persona/junhyuk/prompt');
 
-const CHARACTER_OPINION_MAP = {
-  하나:  hanaPrompt,
-  준혁: junhyukPrompt,
-};
+// persona 폴더 자동 스캔
+const personaDir = path.join(__dirname, 'persona');
+const personaMap = {};
+fs.readdirSync(personaDir).forEach(folder => {
+  const promptPath = path.join(personaDir, folder, 'prompt.js');
+  if (!fs.existsSync(promptPath)) return;
+  const persona = require(promptPath);
+  if (persona.charName) personaMap[persona.charName] = persona;
+});
 
-const CHARACTER_CONVERSE_MAP = {
-  하나:  hanaConversePrompt,
-  준혁: junhyukConversePrompt,
-};
-
-const CHARACTER_CORE_MAP = {
-  하나:  hanaCorePersona,
-  준혁: junhyukCorePersona,
-};
+function getPersona(character) {
+  return personaMap[character] || null;
+}
 
 const OPINION_PATTERNS = [
   /어떻게\s*생각/, /어떻게\s*봐/, /어떤\s*것\s*같/, /어떨\s*것\s*같/,
@@ -40,11 +39,12 @@ async function buildSystemPrompt(character, memory, { isPerspectiveRequest = fal
     : (isOpinionRequest(messages) ? 'OPINION' : 'CONVERSE');
   console.log('[mode]', mode, '| character:', character);
 
+  const persona = getPersona(character);
   const activeBasePrompt = primaryCharName
-    ? (CHARACTER_CORE_MAP[character] || hanaCorePersona)
+    ? (persona?.corePersona || '')
     : (isOpinionRequest(messages)
-        ? (CHARACTER_OPINION_MAP[character] || hanaPrompt)
-        : (CHARACTER_CONVERSE_MAP[character] || hanaConversePrompt));
+        ? (persona?.opinionPrompt || '')
+        : (persona?.conversePrompt || ''));
 
   // secondary 모드에서는 뉴스 블록 자체를 로드하지 않음
   let newsDetailBlock = '';
