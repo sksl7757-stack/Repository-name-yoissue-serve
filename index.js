@@ -446,7 +446,8 @@ app.post('/start-image-generation', async (req, res) => {
 
 
 if (require.main === module) {
-  app.listen(4000, () => console.log('서버 실행중 port 4000'));
+  const PORT = process.env.PORT || 4000;
+  app.listen(PORT, () => console.log(`서버 실행중 port ${PORT}`));
 }
 
 module.exports = app;
