@@ -456,6 +456,31 @@ app.post('/start-image-generation', async (req, res) => {
 });
 
 
+const cron = require('node-cron');
+const { main: selectNews }  = require('./select-news');
+const { main: processNews } = require('./process-news');
+const { main: sendPush }    = require('./send-push');
+
+// 매일 UTC 21:00 — 뉴스 수집
+cron.schedule('0 21 * * *', async () => {
+  console.log('[크론] select-news 시작');
+  try { await selectNews(); } catch (e) { console.error('[크론] select-news 실패:', e.message); }
+});
+
+// 매일 UTC 21:15 — 뉴스 처리
+cron.schedule('15 21 * * *', async () => {
+  console.log('[크론] process-news 시작');
+  try { await processNews(); } catch (e) { console.error('[크론] process-news 실패:', e.message); }
+});
+
+// 매일 UTC 21:35 — 푸시 알림
+cron.schedule('35 21 * * *', async () => {
+  console.log('[크론] send-push 시작');
+  try { await sendPush(); } catch (e) { console.error('[크론] send-push 실패:', e.message); }
+});
+
+console.log('[크론] 스케줄러 등록 완료');
+
 if (require.main === module) {
   const PORT = process.env.PORT || 4000;
   app.listen(PORT, () => console.log(`서버 실행중 port ${PORT}`));
