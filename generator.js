@@ -34,6 +34,7 @@ function isOpinionRequest(messages) {
 }
 
 async function buildSystemPrompt(character, memory, { isPerspectiveRequest = false, perspectiveStep = 0, phase = 'INIT', primaryCharName = null, primaryComment = null, primaryEmotion = null, messages = [], characterEmotion = null } = {}) {
+  console.log('[buildSystemPrompt] primaryCharName:', primaryCharName, '| has primaryComment:', !!primaryComment);
   const mode = primaryCharName
     ? 'SECONDARY'
     : (isOpinionRequest(messages) ? 'OPINION' : 'CONVERSE');

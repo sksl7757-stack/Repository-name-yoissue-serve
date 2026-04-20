@@ -158,6 +158,7 @@ app.post('/chat', async (req, res) => {
 
     // 4. 두 번째 캐릭터 호출 (첫 번째 응답에 반응)
     if (second) {
+      console.log('[second-char]', second, '| primaryCharName:', first, '| primaryComment:', firstValidated.message?.slice(0, 30));
       console.log('[stance-in]', second, '→ reacting to', first);
       const secondRaw       = await generateReply({ character: second, messages, memory, perspectiveStep, phase, primaryCharName: first, primaryComment: firstValidated.message, primaryEmotion: firstRaw.emotion, characterEmotion });
       const secondValidated = validate({ reply: secondRaw.text, phase, character: second });
