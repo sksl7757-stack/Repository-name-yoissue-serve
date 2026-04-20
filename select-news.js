@@ -38,11 +38,30 @@ async function fetchNaverNews(query) {
 }
 
 
+// URL 정규화: 트래킹 파라미터 제거, fragment/trailing slash 정리
+const TRACKING_PREFIXES = ['utm_', 'fbclid', 'gclid', 'yclid', 'msclkid', 'ref', 'ref_', 'from'];
+function normalizeUrl(url) {
+  if (!url) return url;
+  try {
+    const u = new URL(url);
+    for (const key of [...u.searchParams.keys()]) {
+      if (TRACKING_PREFIXES.some(p => key.toLowerCase() === p || key.toLowerCase().startsWith(p + '_'))) {
+        u.searchParams.delete(key);
+      }
+    }
+    u.hash = '';
+    return (u.origin + u.pathname + (u.search ? '?' + u.searchParams.toString() : '')).replace(/\/$/, '');
+  } catch {
+    return url;
+  }
+}
+
 function deduplicateByUrl(items) {
   const seen = new Set();
   return items.filter(item => {
-    if (seen.has(item.link)) return false;
-    seen.add(item.link);
+    const key = normalizeUrl(item.link);
+    if (seen.has(key)) return false;
+    seen.add(key);
     return true;
   });
 }
@@ -82,8 +101,12 @@ const OPINION_WORDS = [
   '특별기고', '데스크', '기자수첩', '독자투고', '단상',
 ];
 
+// 단어를 포함해도 의견 기사가 아닌 복합 표현
+const OPINION_EXCEPTIONS = ['오피니언 리더', '오피니언 리서치', '사설 대응', '칼럼 작성'];
+
 function isOpinion(title) {
   if (title.includes('칼럼니스트')) return false;
+  if (OPINION_EXCEPTIONS.some(e => title.includes(e))) return false;
   // 제목 맨 앞 대괄호 안에 오피니언 단어가 있을 때만 제외
   // 예: "[칼럼] ...", "[기자수첩] ..." → 제외
   // 예: "기자수첩으로 본 트럼프 관세" → 유지

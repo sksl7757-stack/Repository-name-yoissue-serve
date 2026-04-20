@@ -437,9 +437,13 @@ async function main() {
   }
   console.log(`  미처리 뉴스 ${rawRows.length}건 로드`);
 
+  // 1-1. 크롤링 전 title 중복 제거 (불필요한 fetch 방지)
+  const preCrawlRows = deduplicateByTitle(rawRows);
+  console.log(`  크롤링 전 title dedup: ${rawRows.length - preCrawlRows.length}건 제거, ${preCrawlRows.length}건 크롤링`);
+
   // 2. 병렬 크롤링 (최대 5 동시)
   console.log('  크롤링 중...');
-  const withContent = await parallelMap(rawRows, async (row) => {
+  const withContent = await parallelMap(preCrawlRows, async (row) => {
     const content = await fetchArticleContent(row.url);
     if (content) return { ...row, content };
     const fallbackContent = (row.description && row.description.length > 20)
