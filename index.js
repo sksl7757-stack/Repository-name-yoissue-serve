@@ -39,18 +39,9 @@ async function upsertToken(token) {
 }
 
 app.get('/health', (_req, res) => {
-  const openai = process.env.OPENAI_API_KEY;
-  const supabase_url = process.env.SUPABASE_URL;
   res.json({
-    openai_exists: !!openai,
-    openai_length: openai ? openai.length : 0,
-    openai_first3: openai ? openai.slice(0, 3) : 'none',
-    supabase_url_exists: !!supabase_url,
-    supabase_url_value: supabase_url ? supabase_url.slice(0, 20) : 'none',
-    node_env: process.env.NODE_ENV,
-    all_keys: Object.keys(process.env).filter(k =>
-      ['OPENAI', 'SUPABASE', 'NAVER'].some(prefix => k.startsWith(prefix))
-    ),
+    total_env_count: Object.keys(process.env).length,
+    all_env_keys: Object.keys(process.env),
   });
 });
 
