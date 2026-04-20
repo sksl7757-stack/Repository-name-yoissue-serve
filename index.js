@@ -80,71 +80,90 @@ app.post('/chat-opening', async (req, res) => {
   }
 });
 
-// ── 응답 캐릭터 결정 (코드로만 — LLM 관여 없음) ─────────────────────────────
+// ── 응답 캐릭터 결정 (GPT function calling) ──────────────────────────────────
 // returns { first: charName, second: charName | null }
 
-async function decideResponders(messages, primaryChar, secondaryChar) {
+async function decideResponders(messages, primaryChar, secondaryChar, emotionContext) {
   // 첫 코멘트 (메시지 1개 = 뉴스 컨텍스트) → 항상 둘 다
   const userMsgs = messages.filter(m => m.role === 'user');
   if (userMsgs.length === 1) return { first: primaryChar, second: secondaryChar };
 
-  const lastUserMsg = [...messages].reverse().find(m => m.role === 'user');
-  const userText    = (lastUserMsg?.content || '').trim();
+  const OPENAI_KEY = process.env.OPENAI_API_KEY?.replace(/['"]/g, '');
+  const recentMessages = messages.slice(-8);
 
-  // 특정 캐릭터 이름 언급 → 그 캐릭터만 단독
-  if (userText.includes('하나') && !userText.includes('준혁')) return { first: '하나',   second: null };
-  if (userText.includes('준혁') && !userText.includes('하나')) return { first: '준혁',   second: null };
+  try {
+    const res = await fetch('https://api.openai.com/v1/chat/completions', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${OPENAI_KEY}` },
+      body: JSON.stringify({
+        model: 'gpt-4o-mini',
+        max_tokens: 50,
+        messages: [
+          {
+            role: 'system',
+            content: `너는 대화 흐름을 보고 누가 답해야 할지 결정하는 AI야.
 
-  // 의견/입장 표현 → 둘 다 (유저가 A 편 들면 B가 먼저)
-  const OPINION_PATTERNS = ['인 것 같아', '가 맞는 것 같아', '생각이 바뀌었어', '말이 맞아', '말이 맞는 것', '편이야', '동의해', '공감해'];
-  if (OPINION_PATTERNS.some(p => userText.includes(p))) {
-    if (userText.includes(primaryChar))   return { first: secondaryChar, second: primaryChar };
-    if (userText.includes(secondaryChar)) return { first: primaryChar,   second: secondaryChar };
-    return { first: primaryChar, second: secondaryChar };
+캐릭터 정보:
+- ${primaryChar}: ${emotionContext?.primary === 'positive' ? '긍정적' : '부정적'} 시점
+- ${secondaryChar}: ${emotionContext?.secondary === 'positive' ? '긍정적' : '부정적'} 시점
+
+결정 기준:
+- 특정 캐릭터 이름 언급 → 그 캐릭터만
+- 질문이 특정 시점(긍정/부정)과 관련 → 그 시점 캐릭터만
+- 유저가 의견/입장 표현 → 둘 다 (반대 입장 캐릭터가 first)
+- 짧은 공감반응 → 30% 확률로 둘 다, 나머지는 primaryChar만
+- 그 외 → primaryChar만`,
+          },
+          ...recentMessages,
+        ],
+        tools: [{
+          type: 'function',
+          function: {
+            name: 'decide_responders',
+            description: '누가 답할지 결정',
+            parameters: {
+              type: 'object',
+              properties: {
+                first: {
+                  type: 'string',
+                  enum: [primaryChar, secondaryChar],
+                  description: '첫 번째로 답할 캐릭터',
+                },
+                second: {
+                  type: 'string',
+                  enum: [primaryChar, secondaryChar, 'null'],
+                  description: '두 번째로 답할 캐릭터. 한 명만 답하면 null',
+                },
+              },
+              required: ['first', 'second'],
+            },
+          },
+        }],
+        tool_choice: { type: 'function', function: { name: 'decide_responders' } },
+      }),
+    });
+
+    const data = await res.json();
+    const toolCall = data?.choices?.[0]?.message?.tool_calls?.[0];
+    if (toolCall) {
+      const args = JSON.parse(toolCall.function.arguments);
+      console.log('[decideResponders] GPT decided:', args);
+      return {
+        first:  args.first,
+        second: args.second === 'null' ? null : args.second,
+      };
+    }
+  } catch (e) {
+    console.log('[decideResponders] GPT 판단 실패, 기본값 사용:', e.message);
   }
 
-  // 질문 → 이름 언급 있으면 해당 캐릭터, 없으면 GPT 판단
-  const isQuestion = userText.endsWith('?') || ['왜', '어떻게', '뭔데', '뭐야', '뭐가', '어디', '언제', '누가'].some(q => userText.includes(q));
-  if (isQuestion) {
-    if (userText.includes(secondaryChar)) return { first: secondaryChar, second: null };
-    if (userText.includes(primaryChar))   return { first: primaryChar,   second: null };
-
-    const OPENAI_KEY = process.env.OPENAI_API_KEY?.replace(/['"]/g, '');
-    const recentMessages = messages.slice(-6);
-    try {
-      const judgeRes = await fetch('https://api.openai.com/v1/chat/completions', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${OPENAI_KEY}` },
-        body: JSON.stringify({
-          model: 'gpt-4o-mini',
-          max_tokens: 10,
-          messages: [{
-            role: 'user',
-            content: `대화 맥락:\n${recentMessages.map(m => `${m.role}: ${m.content}`).join('\n')}\n\n유저 질문: "${userText}"\n\n이 질문은 "${primaryChar}"(${primaryChar === '하나' ? '부정적' : '긍정적'} 시점)와 "${secondaryChar}"(${secondaryChar === '하나' ? '부정적' : '긍정적'} 시점) 중 누구에게 더 어울리는 질문인가? 이름만 답해.`,
-          }],
-        }),
-      });
-      const judgeData = await judgeRes.json();
-      const picked = judgeData?.choices?.[0]?.message?.content?.trim() ?? '';
-      console.log('[decideResponders] GPT picked:', picked);
-      if (picked.includes(secondaryChar)) return { first: secondaryChar, second: null };
-    } catch {}
-
-    return { first: primaryChar, second: null };
-  }
-
-  // 짧은 공감/반응 → 50% 확률로 보조 끼어들기
-  const SHORT_REACTIONS = ['응', 'ㅇㅇ', '헐', '그러게', '대박', '진짜', '엥', '오', '아', 'ㅋㅋ', 'ㅎㅎ'];
-  const isShort = userText.length <= 6 && SHORT_REACTIONS.some(r => userText.startsWith(r));
-  if (isShort && Math.random() < 0.5) return { first: primaryChar, second: secondaryChar };
-
-  // 기본: 대표만
+  // fallback
   return { first: primaryChar, second: null };
 }
 
 // /chat — harness orchestration
 app.post('/chat', async (req, res) => {
-  const { type, messages, character, memory, perspectiveStep = 0, characterEmotion = null } = req.body;
+  const { type, messages, character, memory, perspectiveStep = 0, characterEmotion = null, secondaryEmotion = null } = req.body;
   try {
     // PERSPECTIVE_NEXT: 시스템 트리거 — topic 검사 없이 바로 생성
     if (type === 'PERSPECTIVE_NEXT') {
@@ -173,7 +192,8 @@ app.post('/chat', async (req, res) => {
     // 1. 응답 캐릭터 결정
     const primaryChar   = character;
     const secondaryChar = character === '하나' ? '준혁' : '하나';
-    const { first, second } = await decideResponders(messages, primaryChar, secondaryChar);
+    const emotionContext = { primary: characterEmotion, secondary: secondaryEmotion };
+    const { first, second } = await decideResponders(messages, primaryChar, secondaryChar, emotionContext);
 
     // 2. state 읽기
     const { phase, questionAsked } = getState(messages, perspectiveStep);
