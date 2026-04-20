@@ -83,7 +83,7 @@ app.post('/chat-opening', async (req, res) => {
 // ── 응답 캐릭터 결정 (코드로만 — LLM 관여 없음) ─────────────────────────────
 // returns { first: charName, second: charName | null }
 
-function decideResponders(messages, primaryChar, secondaryChar) {
+async function decideResponders(messages, primaryChar, secondaryChar) {
   // 첫 코멘트 (메시지 1개 = 뉴스 컨텍스트) → 항상 둘 다
   const userMsgs = messages.filter(m => m.role === 'user');
   if (userMsgs.length === 1) return { first: primaryChar, second: secondaryChar };
@@ -103,9 +103,35 @@ function decideResponders(messages, primaryChar, secondaryChar) {
     return { first: primaryChar, second: secondaryChar };
   }
 
-  // 질문 → 직전에 말한 캐릭터(=대표) 단독
+  // 질문 → 이름 언급 있으면 해당 캐릭터, 없으면 GPT 판단
   const isQuestion = userText.endsWith('?') || ['왜', '어떻게', '뭔데', '뭐야', '뭐가', '어디', '언제', '누가'].some(q => userText.includes(q));
-  if (isQuestion) return { first: primaryChar, second: null };
+  if (isQuestion) {
+    if (userText.includes(secondaryChar)) return { first: secondaryChar, second: null };
+    if (userText.includes(primaryChar))   return { first: primaryChar,   second: null };
+
+    const OPENAI_KEY = process.env.OPENAI_API_KEY?.replace(/['"]/g, '');
+    const recentMessages = messages.slice(-6);
+    try {
+      const judgeRes = await fetch('https://api.openai.com/v1/chat/completions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${OPENAI_KEY}` },
+        body: JSON.stringify({
+          model: 'gpt-4o-mini',
+          max_tokens: 10,
+          messages: [{
+            role: 'user',
+            content: `대화 맥락:\n${recentMessages.map(m => `${m.role}: ${m.content}`).join('\n')}\n\n유저 질문: "${userText}"\n\n이 질문은 "${primaryChar}"(${primaryChar === '하나' ? '부정적' : '긍정적'} 시점)와 "${secondaryChar}"(${secondaryChar === '하나' ? '부정적' : '긍정적'} 시점) 중 누구에게 더 어울리는 질문인가? 이름만 답해.`,
+          }],
+        }),
+      });
+      const judgeData = await judgeRes.json();
+      const picked = judgeData?.choices?.[0]?.message?.content?.trim() ?? '';
+      console.log('[decideResponders] GPT picked:', picked);
+      if (picked.includes(secondaryChar)) return { first: secondaryChar, second: null };
+    } catch {}
+
+    return { first: primaryChar, second: null };
+  }
 
   // 짧은 공감/반응 → 50% 확률로 보조 끼어들기
   const SHORT_REACTIONS = ['응', 'ㅇㅇ', '헐', '그러게', '대박', '진짜', '엥', '오', '아', 'ㅋㅋ', 'ㅎㅎ'];
@@ -147,7 +173,7 @@ app.post('/chat', async (req, res) => {
     // 1. 응답 캐릭터 결정
     const primaryChar   = character;
     const secondaryChar = character === '하나' ? '준혁' : '하나';
-    const { first, second } = decideResponders(messages, primaryChar, secondaryChar);
+    const { first, second } = await decideResponders(messages, primaryChar, secondaryChar);
 
     // 2. state 읽기
     const { phase, questionAsked } = getState(messages, perspectiveStep);
