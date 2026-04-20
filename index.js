@@ -84,6 +84,10 @@ app.post('/chat-opening', async (req, res) => {
 // returns { first: charName, second: charName | null }
 
 function decideResponders(messages, primaryChar, secondaryChar) {
+  // 첫 코멘트 (메시지 1개 = 뉴스 컨텍스트) → 항상 둘 다
+  const userMsgs = messages.filter(m => m.role === 'user');
+  if (userMsgs.length === 1) return { first: primaryChar, second: secondaryChar };
+
   const lastUserMsg = [...messages].reverse().find(m => m.role === 'user');
   const userText    = (lastUserMsg?.content || '').trim();
 
