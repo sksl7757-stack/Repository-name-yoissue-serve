@@ -38,13 +38,6 @@ async function upsertToken(token) {
   if (error) console.error('push_tokens upsert 오류:', error.message);
 }
 
-app.get('/health', (_req, res) => {
-  res.json({
-    total_env_count: Object.keys(process.env).length,
-    all_env_keys: Object.keys(process.env),
-  });
-});
-
 const OPENING_MESSAGES = {
   경제: ['이거 은근 생활비랑 연결되는 얘긴데', '요즘 물가 생각하면 좀 신경 쓰이는 얘기야', '이거 우리 지갑이랑 관련 있을 수도 있어', '오늘 경제 쪽 포인트 하나 있는데', '결론부터 말하면 생활에 영향 있을 가능성 있음'],
   정치: ['이거 좀 복잡한 얘긴데', '이거 은근 우리랑 연결되는 얘기더라', '오늘 정치 쪽 흐름 하나 짚어보면', '이건 구조 알면 이해됨', '이건 배경 알아야 이해되는 내용임'],
