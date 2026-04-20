@@ -88,6 +88,15 @@ async function decideResponders(messages, primaryChar, secondaryChar, emotionCon
   const userMsgs = messages.filter(m => m.role === 'user');
   if (userMsgs.length === 1) return { first: primaryChar, second: secondaryChar };
 
+  const lastUserMsg = [...messages].reverse().find(m => m.role === 'user');
+  const userText    = (lastUserMsg?.content || '').trim();
+
+  const SHORT_REACTIONS = ['응', 'ㅇㅇ', '헐', '그러게', '대박', '진짜', '엥', 'ㅋㅋ', 'ㅎㅎ'];
+  const isShort = userText.length <= 6 && SHORT_REACTIONS.some(r => userText.startsWith(r));
+  if (isShort) return Math.random() < 0.3
+    ? { first: primaryChar, second: secondaryChar }
+    : { first: primaryChar, second: null };
+
   const OPENAI_KEY = process.env.OPENAI_API_KEY?.replace(/['"]/g, '');
   const recentMessages = messages.slice(-8);
 
@@ -103,16 +112,16 @@ async function decideResponders(messages, primaryChar, secondaryChar, emotionCon
             role: 'system',
             content: `너는 대화 흐름을 보고 누가 답해야 할지 결정하는 AI야.
 
-캐릭터 정보:
+캐릭터 시점:
 - ${primaryChar}: ${emotionContext?.primary === 'positive' ? '긍정적' : '부정적'} 시점
 - ${secondaryChar}: ${emotionContext?.secondary === 'positive' ? '긍정적' : '부정적'} 시점
 
-결정 기준:
-- 특정 캐릭터 이름 언급 → 그 캐릭터만
-- 질문이 특정 시점(긍정/부정)과 관련 → 그 시점 캐릭터만
-- 유저가 의견/입장 표현 → 둘 다 (반대 입장 캐릭터가 first)
-- 짧은 공감반응 → 30% 확률로 둘 다, 나머지는 primaryChar만
-- 그 외 → primaryChar만`,
+결정 규칙:
+1. 특정 캐릭터 이름 언급 → 그 캐릭터만 단독
+2. 사실 확인 질문 (뭐야? 이게 맞아? 왜 그래?) → second: "null", first: ${primaryChar}
+3. 특정 시점과 관련된 질문 (긍정적인 게 뭐야? 왜 좋다고 봐?) → 그 시점 캐릭터 단독
+4. 의견/입장 표현 → 반대 입장 캐릭터가 first, 나머지가 second
+5. 그 외 → second: "null", first: ${primaryChar}`,
           },
           ...recentMessages,
         ],
