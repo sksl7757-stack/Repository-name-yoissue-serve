@@ -97,11 +97,11 @@ async function decideResponders(messages, primaryChar, secondaryChar, emotionCon
     ? { first: primaryChar, second: secondaryChar }
     : { first: primaryChar, second: null };
 
-  // 정확한 이름 언급 → 코드로 즉시 처리 (반대 캐릭터가 반응)
+  // 정확한 이름 언급 → 언급된 캐릭터가 직접 답
   if (userText.includes(primaryChar) && !userText.includes(secondaryChar))
-    return { first: secondaryChar, second: null };
-  if (userText.includes(secondaryChar) && !userText.includes(primaryChar))
     return { first: primaryChar, second: null };
+  if (userText.includes(secondaryChar) && !userText.includes(primaryChar))
+    return { first: secondaryChar, second: null };
 
   const OPENAI_KEY = process.env.OPENAI_API_KEY?.replace(/['"]/g, '');
   const recentMessages = messages.slice(-8);
@@ -126,10 +126,6 @@ async function decideResponders(messages, primaryChar, secondaryChar, emotionCon
 - "${primaryChar}" 변형: 이름이 비슷하게 발음되는 표현 모두 포함
 - "${secondaryChar}" 변형: 이름이 비슷하게 발음되는 표현 모두 포함
 
-유저가 특정 캐릭터(변형 포함)를 지지하거나 편을 들면
-→ 반대 캐릭터만 단독 반응 (second: "null")
-유저가 캐릭터 언급 없이 의견 표현 → 둘 다
-
 후속 질문 판단 규칙:
 유저가 "뭔데?", "왜?", "어떻게?", "그게 뭐야?" 같은 질문을 할 때,
 최근 대화 맥락에서 그 키워드(예: "리스크", "기회", "위험")를
@@ -139,10 +135,13 @@ async function decideResponders(messages, primaryChar, secondaryChar, emotionCon
 - 하나가 "기회가 될 것 같아"라고 했고 → 유저가 "어떤 기회야?" → 하나 단독
 
 결정 규칙:
-1. 사실 확인 질문 (뭐야? 이게 맞아? 왜 그래?) → second: "null", first: ${primaryChar}
-2. 특정 시점과 관련된 질문 (긍정적인 게 뭐야? 왜 좋다고 봐?) → 그 시점 캐릭터 단독
-3. 의견/입장 표현 (캐릭터 언급 없음) → 반대 입장 캐릭터가 first, 나머지가 second
-4. 그 외 → second: "null", first: ${primaryChar}`,
+1. 특정 캐릭터 이름(변형 포함) 언급 또는 그 캐릭터 편을 들면 → 그 캐릭터 단독
+   예: "${primaryChar}이가 맞아", "${primaryChar} 말이 맞는 것 같아" → first: ${primaryChar}, second: null
+   예: "${secondaryChar} 말이 맞아", "${secondaryChar}가 좋아" → first: ${secondaryChar}, second: null
+2. 사실 확인 질문 (뭐야? 이게 맞아? 왜 그래?) → second: "null", first: 그 내용을 말한 캐릭터
+3. 특정 시점과 관련된 질문 (긍정적인 게 뭐야? 왜 좋다고 봐?) → 그 시점 캐릭터 단독
+4. 의견/입장 표현 (캐릭터 언급 없음) → 반대 입장 캐릭터가 first, 나머지가 second
+5. 그 외 → second: "null", first: ${primaryChar}`,
           },
           ...recentMessages,
         ],
