@@ -249,7 +249,8 @@ app.post('/chat', async (req, res) => {
 
     // 두 번째 캐릭터 스트리밍
     if (second) {
-      const secondCharEmotion = second === primaryChar ? characterEmotion : secondaryEmotion;
+      console.log('[emotion]', 'primary:', characterEmotion, '| secondary:', secondaryEmotion);
+      const secondCharEmotion = secondaryEmotion || (characterEmotion === 'positive' ? 'negative' : 'positive');
       await new Promise(r => setTimeout(r, 600));
       console.log('[second-char]', second, '| primaryComment:', firstValidated.message?.slice(0, 30));
 
