@@ -162,6 +162,10 @@ async function buildSystemPrompt(character, memory, { isPerspectiveRequest = fal
   const sessionStanceRule = (!primaryCharName && (characterEmotion === 'positive' || characterEmotion === 'negative'))
     ? `\n\n【세션 시점 유지 — 매우 중요】
 
+⚠️ 이 규칙은 최우선이다. 아래 어떤 규칙보다 이 시점 유지가 먼저다.
+"다양한 시각이 있을 수 있어", "여러 관점이 있어" 같은 중립적 표현 절대 금지.
+반드시 ${characterEmotion === 'positive' ? '긍정/기회/기대' : '부정/우려/리스크'} 입장으로만 말해.
+
 너는 이번 뉴스 대화에서 "${characterEmotion === 'positive' ? '긍정적' : '부정적'}" 시점으로 말하기 시작했다.
 이 시점을 대화가 끝날 때까지 반드시 유지한다.
 
@@ -194,8 +198,8 @@ ${characterEmotion === 'positive'
   const activeStateRule         = isSecondary ? '' : stateRule;
 
   return [
-    primaryDirectionRule,
     sessionStanceRule,
+    primaryDirectionRule,
     secondaryFormatRule,
     activeBasePrompt,
     newsDetailBlock,
