@@ -28,7 +28,7 @@ async function main() {
 
   console.log(`  미발송 항목 ${items.length}건`);
 
-  const SERVER_URL = process.env.SERVER_URL || 'https://repository-name-yoissue-serve.vercel.app';
+  const SERVER_URL = process.env.SERVER_URL || 'https://repository-name-yoissue-serve-production-9ee6.up.railway.app';
 
   for (const item of items) {
     try {

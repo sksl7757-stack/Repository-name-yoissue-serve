@@ -9,7 +9,7 @@ const cors = require('cors');
 const { getState, updateState } = require('./stateManager');
 const { generateReply, buildSystemPrompt } = require('./generator');
 const { validate } = require('./validator');
-const { buildResponse } = require('./responseBuilder');
+
 const { saveNews, getSavedNews } = require('./saveNews');
 const { addRecord, getRecords } = require('./records');
 const { supabase } = require('./supabase');
@@ -80,52 +80,96 @@ app.post('/chat-opening', async (req, res) => {
   }
 });
 
+// ── 응답 캐릭터 결정 (코드로만 — LLM 관여 없음) ─────────────────────────────
+// returns { first: charName, second: charName | null }
+
+function decideResponders(messages, primaryChar, secondaryChar) {
+  const lastUserMsg = [...messages].reverse().find(m => m.role === 'user');
+  const userText    = (lastUserMsg?.content || '').trim();
+
+  // 특정 캐릭터 이름 언급 → 그 캐릭터만 단독
+  if (userText.includes('하나') && !userText.includes('준혁')) return { first: '하나',   second: null };
+  if (userText.includes('준혁') && !userText.includes('하나')) return { first: '준혁',   second: null };
+
+  // 의견/입장 표현 → 둘 다 (유저가 A 편 들면 B가 먼저)
+  const OPINION_PATTERNS = ['인 것 같아', '가 맞는 것 같아', '생각이 바뀌었어', '말이 맞아', '말이 맞는 것', '편이야', '동의해', '공감해'];
+  if (OPINION_PATTERNS.some(p => userText.includes(p))) {
+    if (userText.includes(primaryChar))   return { first: secondaryChar, second: primaryChar };
+    if (userText.includes(secondaryChar)) return { first: primaryChar,   second: secondaryChar };
+    return { first: primaryChar, second: secondaryChar };
+  }
+
+  // 질문 → 직전에 말한 캐릭터(=대표) 단독
+  const isQuestion = userText.endsWith('?') || ['왜', '어떻게', '뭔데', '뭐야', '뭐가', '어디', '언제', '누가'].some(q => userText.includes(q));
+  if (isQuestion) return { first: primaryChar, second: null };
+
+  // 짧은 공감/반응 → 50% 확률로 보조 끼어들기
+  const SHORT_REACTIONS = ['응', 'ㅇㅇ', '헐', '그러게', '대박', '진짜', '엥', '오', '아', 'ㅋㅋ', 'ㅎㅎ'];
+  const isShort = userText.length <= 6 && SHORT_REACTIONS.some(r => userText.startsWith(r));
+  if (isShort && Math.random() < 0.5) return { first: primaryChar, second: secondaryChar };
+
+  // 기본: 대표만
+  return { first: primaryChar, second: null };
+}
+
 // /chat — harness orchestration
 app.post('/chat', async (req, res) => {
-  const { type, messages, character, memory, perspectiveStep = 0, primaryCharName = null, primaryComment = null, primaryEmotion = null, characterEmotion = null } = req.body;
+  const { type, messages, character, memory, perspectiveStep = 0, characterEmotion = null } = req.body;
   try {
     // PERSPECTIVE_NEXT: 시스템 트리거 — topic 검사 없이 바로 생성
     if (type === 'PERSPECTIVE_NEXT') {
-      // perspectiveStep은 클라이언트가 이미 증가시켜서 전송 (서버는 stateless)
       if (perspectiveStep > 2) {
         return res.json({
-          message: character === '하나'
-            ? '나 이 얘기는 여기까지면 충분한 것 같아 🌸 내일 또 같이 보자'
-            : '이 정도면 핵심은 다 봤어. 내일 다시 보자',
+          turns: [{
+            character,
+            message: character === '하나'
+              ? '나 이 얘기는 여기까지면 충분한 것 같아 🌸 내일 또 같이 보자'
+              : '이 정도면 핵심은 다 봤어. 내일 다시 보자',
+            emotion: 'neutral',
+          }],
           question: null,
           end: true,
         });
       }
       console.log('[stance-in]', character, '→', characterEmotion);
-      const rawReply = await generateReply({ character, messages, memory, perspectiveStep, isPerspectiveRequest: true, characterEmotion });
+      const rawReply      = await generateReply({ character, messages, memory, perspectiveStep, isPerspectiveRequest: true, characterEmotion });
       const validatedReply = validate({ reply: rawReply.text, phase: 'CHAT', character });
-      return res.json(buildResponse({ message: validatedReply.message, question: validatedReply.question, emotion: rawReply.emotion }));
+      return res.json({
+        turns:    [{ character, message: validatedReply.message, emotion: rawReply.emotion }],
+        question: validatedReply.question,
+      });
     }
 
-    // 1. state 읽기 (코드에서만 결정 — LLM 관여 없음)
+    // 1. 응답 캐릭터 결정
+    const primaryChar   = character;
+    const secondaryChar = character === '하나' ? '준혁' : '하나';
+    const { first, second } = decideResponders(messages, primaryChar, secondaryChar);
+
+    // 2. state 읽기
     const { phase, questionAsked } = getState(messages, perspectiveStep);
 
+    // 3. 첫 번째 캐릭터 호출
+    console.log('[stance-in]', first, '→', characterEmotion);
+    const firstRaw       = await generateReply({ character: first, messages, memory, perspectiveStep, phase, primaryCharName: null, primaryComment: null, primaryEmotion: null, characterEmotion });
+    const firstValidated = validate({ reply: firstRaw.text, phase, character: first });
+    console.log('first reply:', firstValidated.message?.slice(0, 80));
 
-    // 3. generator 실행 (말투/스타일만 담당)
-    console.log('[stance-in]', character, '→', characterEmotion);
-    const rawReply = await generateReply({ character, messages, memory, perspectiveStep, phase, primaryCharName, primaryComment, primaryEmotion, characterEmotion });
-    console.log('generator reply:', rawReply);
+    const turns = [{ character: first, message: firstValidated.message, emotion: firstRaw.emotion }];
 
-    // 4. validator 실행 (질문 추가/제거, 주제 이탈 — 코드에서만 결정)
-    const validatedReply = validate({ reply: rawReply.text, phase, character });
-    console.log('validated:', JSON.stringify({
-      message: validatedReply.message?.slice(0, 80),
-      question: validatedReply.question,
-    }));
+    // 4. 두 번째 캐릭터 호출 (첫 번째 응답에 반응)
+    if (second) {
+      console.log('[stance-in]', second, '→ reacting to', first);
+      const secondRaw       = await generateReply({ character: second, messages, memory, perspectiveStep, phase, primaryCharName: first, primaryComment: firstValidated.message, primaryEmotion: firstRaw.emotion, characterEmotion });
+      const secondValidated = validate({ reply: secondRaw.text, phase, character: second });
+      console.log('second reply:', secondValidated.message?.slice(0, 80));
+      turns.push({ character: second, message: secondValidated.message, emotion: secondRaw.emotion });
+    }
 
-    // 4-1. validator가 질문을 추가했으면 state 업데이트 (다음 요청 대비 로깅용)
-    const updatedState = updateState({ phase, questionAsked }, {
-      questionAsked: !!validatedReply.question,
-    });
+    // 5. state 업데이트 (로깅용)
+    const updatedState = updateState({ phase, questionAsked }, { questionAsked: !!firstValidated.question });
     console.log('state:', updatedState);
 
-    // 5. responseBuilder로 최종 응답 생성
-    res.json(buildResponse({ message: validatedReply.message, question: validatedReply.question, phase, emotion: rawReply.emotion }));
+    res.json({ turns, question: firstValidated.question });
   } catch (e) {
     console.log('chat 에러:', e.message);
     res.status(500).json({ error: e.message });
