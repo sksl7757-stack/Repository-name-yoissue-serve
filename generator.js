@@ -158,8 +158,8 @@ async function buildSystemPrompt(character, memory, { isPerspectiveRequest = fal
     ? `\n\n【상대 발언 — 반드시 이 내용에 반응할 것】\n${primaryCharName}: "${primaryComment}"`
     : '';
 
-  // primary 전용: 세션 시점 유지 규칙 (positive/negative일 때만, neutral·null은 스킵)
-  const sessionStanceRule = (!primaryCharName && (characterEmotion === 'positive' || characterEmotion === 'negative'))
+  // secondary 모드일 때도 characterEmotion에 secondaryEmotion이 이미 들어온다
+  const sessionStanceRule = ((characterEmotion === 'positive' || characterEmotion === 'negative'))
     ? `【절대 규칙 — 시점 고정 — 어떤 규칙보다 우선】
 
 이번 대화에서 너의 시점은 "${characterEmotion === 'positive' ? '긍정적' : '부정적'}"으로 고정됐다.

@@ -192,14 +192,15 @@ async function decideResponders(messages, primaryChar, secondaryChar, emotionCon
 
 // /chat-init — 앱 시작 시 첫 코멘트용 (일반 JSON 응답)
 app.post('/chat-init', async (req, res) => {
-  const { character, messages, memory, characterEmotion, secondaryChar } = req.body;
+  const { character, messages, memory, characterEmotion, secondaryChar, secondaryEmotion } = req.body;
   try {
     const secChar = secondaryChar || (character === '하나' ? '준혁' : '하나');
 
     const primaryRaw      = await generateReply({ character, messages, memory, phase: 'INIT', characterEmotion });
     const primaryValidated = validate({ reply: primaryRaw.text, phase: 'INIT', character });
 
-    const secondaryRaw      = await generateReply({ character: secChar, messages, memory, phase: 'INIT', primaryCharName: character, primaryComment: primaryValidated.message, primaryEmotion: primaryRaw.emotion, characterEmotion: primaryRaw.emotion === 'positive' ? 'negative' : 'positive' });
+    const secEmotion = secondaryEmotion || (primaryRaw.emotion === 'positive' ? 'negative' : 'positive');
+    const secondaryRaw      = await generateReply({ character: secChar, messages, memory, phase: 'INIT', primaryCharName: character, primaryComment: primaryValidated.message, primaryEmotion: primaryRaw.emotion, characterEmotion: secEmotion });
     const secondaryValidated = validate({ reply: secondaryRaw.text, phase: 'CHAT', character: secChar });
 
     res.json({
