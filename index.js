@@ -22,6 +22,9 @@ const app = express();
 app.use(cors());
 app.use(express.json({ limit: '256kb' }));
 
+// Railway 앞단 프록시 → req.ip가 실제 클라이언트 IP를 반영하도록 설정.
+app.set('trust proxy', 1);
+
 // ── 인증: 공유 비밀 키 (x-api-key 헤더) ───────────────────────────────────────
 // API_SHARED_SECRET 미설정 시 경고 후 통과 (로컬 개발/레거시 호환)
 
@@ -37,6 +40,45 @@ app.use((req, res, next) => {
   if (req.headers['x-api-key'] === API_SECRET) return next();
   return res.status(401).json({ error: 'unauthorized' });
 });
+
+// ── 레이트리밋: IP별 슬라이딩 윈도우 (인-메모리, 단일 인스턴스 전제) ───────────
+// Railway는 단일 컨테이너라 로컬 Map으로 충분. 멀티 인스턴스 전환 시 Redis 필요.
+
+const LIMITER_REGISTRY = [];
+
+function createLimiter(limit, windowMs) {
+  const hits = new Map();
+  LIMITER_REGISTRY.push({ map: hits, windowMs });
+  return (req, res, next) => {
+    const ip = req.ip || req.headers['x-forwarded-for'] || 'unknown';
+    const now = Date.now();
+    const recent = (hits.get(ip) || []).filter(t => now - t < windowMs);
+    if (recent.length >= limit) {
+      res.setHeader('Retry-After', Math.ceil(windowMs / 1000));
+      return res.status(429).json({ error: 'rate_limited' });
+    }
+    recent.push(now);
+    hits.set(ip, recent);
+    return next();
+  };
+}
+
+// 만료 엔트리 정리 — 10분마다 오래된 IP 제거
+setInterval(() => {
+  const now = Date.now();
+  for (const { map, windowMs } of LIMITER_REGISTRY) {
+    for (const [ip, arr] of map.entries()) {
+      if (arr.length === 0 || now - arr[arr.length - 1] > windowMs) map.delete(ip);
+    }
+  }
+}, 10 * 60 * 1000).unref?.();
+
+// LLM 호출: 분당 60회 (/chat 버스트 + 통신사 NAT 다중 사용자 대비)
+const llmLimiter   = createLimiter(60, 60 * 1000);
+// ComfyUI 이미지: 분당 5회 (매우 비쌈)
+const imageLimiter = createLimiter(5, 60 * 1000);
+// 토큰 등록: 분당 5회 (푸시 토큰 폴루션 방어 — 인스톨 당 1회성 작업)
+const registerLimiter = createLimiter(5, 60 * 1000);
 
 // ── 메시지 sanitizer: 클라이언트 주입 방어 ────────────────────────────────────
 // 외부 입력에서 role=system 등 비허용 롤을 차단하고 content를 문자열로 정규화.
@@ -79,9 +121,11 @@ const OPENING_MESSAGES = {
   환경: ['이거 생각보다 가까운 얘기야', '이거 은근 신경 쓰이는 흐름이긴 해', '오늘 환경 쪽 포인트 하나 있는데', '이건 장기적으로 영향 있을 내용임', '이건 알아두면 나쁘지 않음'],
   건강: ['이거 몸이랑 연결되는 얘긴데', '이거 은근 신경 쓰일 수도 있겠다', '오늘 건강 쪽 이슈 하나 있는데', '이건 생활이랑 직접 연결된 내용임', '이건 알아두면 도움될 가능성 있음'],
   부동산: ['이거 집이랑 연결되는 얘긴데', '이거 은근 생활이랑 가까운 얘기야', '오늘 부동산 쪽 포인트 하나 있는데', '이건 주거 비용이랑 연결된 내용임', '결론부터 말하면 영향 있을 가능성 있음'],
+  안보: ['이거 좀 무거운 얘긴데 알아두면 좋아', '이거 우리 일상이랑 완전 먼 얘기는 아니더라', '오늘 안보 쪽 흐름 하나 짚어보면', '이건 한 번 짚고 넘어갈 필요 있음', '이건 장기적으로 영향 있을 내용임'],
+  추모: ['오늘은 조용히 전할 소식이 있어', '오늘은 함께 기억할 얘기가 있어', '오늘은 판단보다 마음이 먼저인 얘기야', '오늘은 잠시 조용히 마음 써주자', '함께 기억해야 할 내용임'],
 };
 
-app.post('/chat-opening', async (req, res) => {
+app.post('/chat-opening', llmLimiter, async (req, res) => {
   const { character, memory, isMourning = false } = req.body;
   try {
     const OPENAI_KEY = process.env.OPENAI_API_KEY?.replace(/['"]/g, '');
@@ -225,7 +269,7 @@ async function decideResponders(messages, primaryChar, secondaryChar, emotionCon
 }
 
 // /chat-init — 앱 시작 시 첫 코멘트용 (일반 JSON 응답)
-app.post('/chat-init', async (req, res) => {
+app.post('/chat-init', llmLimiter, async (req, res) => {
   const { character, messages: rawMessages, memory, characterEmotion, secondaryChar, secondaryEmotion, isMourning = false } = req.body;
   const messages = sanitizeMessages(rawMessages);
   try {
@@ -261,7 +305,7 @@ app.post('/chat-init', async (req, res) => {
 });
 
 // /chat — SSE 스트리밍
-app.post('/chat', async (req, res) => {
+app.post('/chat', llmLimiter, async (req, res) => {
   res.setHeader('Content-Type', 'text/event-stream');
   res.setHeader('Cache-Control', 'no-cache');
   res.setHeader('Connection', 'keep-alive');
@@ -376,7 +420,7 @@ app.post('/chat', async (req, res) => {
   }
 });
 
-app.post('/analyze-memory', async (req, res) => {
+app.post('/analyze-memory', llmLimiter, async (req, res) => {
   const { messages: rawMessages, currentMemory } = req.body;
   const messages = sanitizeMessages(rawMessages);
   try {
@@ -426,7 +470,7 @@ ${JSON.stringify(messages || [], null, 2)}`;
   }
 });
 
-app.post('/register-token', async (req, res) => {
+app.post('/register-token', registerLimiter, async (req, res) => {
   const { token } = req.body;
   if (!token) return res.status(400).json({ error: 'token required' });
   await upsertToken(token);
@@ -435,19 +479,21 @@ app.post('/register-token', async (req, res) => {
 });
 
 app.post('/send-notifications', async (req, res) => {
-  const { tag } = req.body;
+  const { tag, isMourning = false } = req.body;
   const tokens = await readTokens();
   if (tokens.length === 0) return res.json({ sent: 0 });
 
   const rawTag = (tag || '').split('· ').pop()?.trim();
-  const pool = OPENING_MESSAGES[rawTag] || [];
+  const mourning = Boolean(isMourning) || rawTag === '추모';
+  const pool = OPENING_MESSAGES[rawTag] || (mourning ? OPENING_MESSAGES['추모'] : []);
   const body = pool.length > 0
     ? pool[Math.floor(Math.random() * pool.length)]
     : '오늘의 이슈가 도착했어요!';
+  const title = mourning ? '오늘의 소식' : '오늘의 픽 도착 🔔';
 
   const messages = tokens.map(token => ({
     to: token,
-    title: '오늘의 픽 도착 🔔',
+    title,
     body,
     data: { tag },
   }));
@@ -541,7 +587,7 @@ async function pollComfyHistory(baseUrl, promptId, maxWaitMs = 120000) {
   throw new Error('ComfyUI 이미지 생성 타임아웃');
 }
 
-app.post('/generate-image', async (req, res) => {
+app.post('/generate-image', imageLimiter, async (req, res) => {
   const { category, emotion, character, newsTitle } = req.body;
   if (!category || !emotion || !character || !newsTitle) {
     return res.status(400).json({ error: 'category, emotion, character, newsTitle 필요' });
@@ -605,7 +651,7 @@ const IMAGE_COMBOS = [
   { character: '준혁', charKey: 'junhyuk', imageType: 'after',     emotion: 'unsure'   },
 ];
 
-app.post('/start-image-generation', async (req, res) => {
+app.post('/start-image-generation', imageLimiter, async (req, res) => {
   const { category, title } = req.body;
   if (!category || !title) {
     return res.status(400).json({ error: 'category, title 필요' });

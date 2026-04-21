@@ -16,7 +16,7 @@ async function main() {
 
   const { data: items, error } = await supabase
     .from('news_processed')
-    .select('*')
+    .select('id, title, tag, is_mourning_required')
     .eq('date', today)
     .eq('pushed', false);
 
@@ -40,7 +40,7 @@ async function main() {
           'Content-Type': 'application/json',
           ...(apiKey ? { 'x-api-key': apiKey } : {}),
         },
-        body: JSON.stringify({ title: item.title, tag: item.tag }),
+        body: JSON.stringify({ title: item.title, tag: item.tag, isMourning: item.is_mourning_required }),
       });
       const data = await res.json();
       console.log(`  푸시 발송: ${data.sent ?? 0}명 — ${item.title.slice(0, 40)}`);
