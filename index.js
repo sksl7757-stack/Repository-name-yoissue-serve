@@ -297,7 +297,7 @@ app.post('/chat-init', llmLimiter, async (req, res) => {
     }
 
     const secChar = secondaryChar || (character === '하나' ? '준혁' : '하나');
-    const secEmotion = secondaryEmotion || (primaryRaw.emotion === 'positive' ? 'negative' : 'positive');
+    const secEmotion = characterEmotion === 'positive' ? 'negative' : 'positive';
     const secondaryRaw      = await generateReply({ character: secChar, messages, memory, phase: 'INIT', primaryCharName: character, primaryComment: primaryValidated.message, primaryEmotion: primaryRaw.emotion, characterEmotion: secEmotion });
     const secondaryValidated = validate({ reply: secondaryRaw.text, phase: 'CHAT', character: secChar });
 
@@ -391,6 +391,8 @@ app.post('/chat', llmLimiter, async (req, res) => {
     const secondaryChar  = reqSecondaryChar || (character === '하나' ? '준혁' : '하나');
     const { phase, questionAsked } = getState(messages, perspectiveStep);
 
+    console.log('[emotion-in]', 'primary=', characterEmotion, '| secondary=', secondaryEmotion);
+
     // MOURNING 모드: 항상 primary 단독 응답, decideResponders/stance 전부 우회
     let first, second, firstEmotion, secondEmotion;
     if (isMourning) {
@@ -403,8 +405,9 @@ app.post('/chat', llmLimiter, async (req, res) => {
       const decided = await decideResponders(messages, primaryChar, secondaryChar, emotionContext);
       first = decided.first;
       second = decided.second;
-      firstEmotion  = first  === primaryChar ? characterEmotion : (secondaryEmotion || (characterEmotion === 'positive' ? 'negative' : 'positive'));
-      secondEmotion = second === primaryChar ? characterEmotion : (secondaryEmotion || (characterEmotion === 'positive' ? 'negative' : 'positive'));
+      const opposite = characterEmotion === 'positive' ? 'negative' : 'positive';
+      firstEmotion  = first  === primaryChar ? characterEmotion : opposite;
+      secondEmotion = second === primaryChar ? characterEmotion : opposite;
     }
 
     // 첫 번째 캐릭터 스트리밍
