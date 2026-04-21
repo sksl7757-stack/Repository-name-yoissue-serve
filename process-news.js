@@ -398,18 +398,18 @@ ${candidates.map(c => `[${c.index}] ${c.title} (${c.source})\n    ${c.summary}`)
 const CONCURRENCY = 5;
 
 async function parallelMap(items, handler) {
-  const results = [];
-  const executing = [];
-  for (const item of items) {
-    const p = Promise.resolve().then(() => handler(item));
-    results.push(p);
-    if (CONCURRENCY <= items.length) {
-      const e = p.then(() => executing.splice(executing.indexOf(e), 1));
-      executing.push(e);
-      if (executing.length >= CONCURRENCY) await Promise.race(executing);
+  const results = new Array(items.length);
+  let next = 0;
+  async function worker() {
+    while (true) {
+      const i = next++;
+      if (i >= items.length) return;
+      results[i] = await handler(items[i]);
     }
   }
-  return Promise.all(results);
+  const workerCount = Math.min(CONCURRENCY, items.length);
+  await Promise.all(Array.from({ length: workerCount }, worker));
+  return results;
 }
 
 // ─── main ─────────────────────────────────────────────────────────────────────
