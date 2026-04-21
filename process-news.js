@@ -621,9 +621,13 @@ async function main() {
 }
 
 async function markAllProcessed(rows) {
-  for (const row of rows) {
-    await supabase.from('news_raw').update({ processed: true }).eq('id', row.id);
-  }
+  if (!rows || rows.length === 0) return;
+  const ids = rows.map(r => r.id);
+  const { error } = await supabase
+    .from('news_raw')
+    .update({ processed: true })
+    .in('id', ids);
+  if (error) console.warn('  ⚠ markAllProcessed 실패 (저장은 성공):', error.message);
 }
 
 module.exports = { main, inferTag, CATEGORY_MAP };
