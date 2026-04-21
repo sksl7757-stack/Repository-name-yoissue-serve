@@ -143,10 +143,10 @@ function secondaryFormatRuleFor(primaryCharName, primaryComment, primaryEmotion)
   return `【출력 형식 강제 — 최우선 규칙】\n\n너는 지금 ${primaryCharName}의 말에 반박하는 역할이다.\n${oppositionRule}\n\n* ${primaryCharName} 말에 동의하지 마라\n* 반드시 다른 결론을 제시해라\n* 부드러운 공감보다, 분명한 차이를 만들어라\n\n【이름 사용 — 자연스러운 경우에만】\n상대 이름(${primaryCharName})을 1회 자연스럽게 언급해도 된다.\n예: "${primaryCharName}는 걱정하지만 나는 달라", "${primaryCharName} 말이랑 반대로 나는..."\n억지로 넣지 않아도 됨. 이름 없이도 대립이 명확하면 OK.\n\n다음 표현은 절대 사용 금지:\n- "이 뉴스는"\n- "이번 사건은"\n- "반응:"\n- "설명:"\n- neutral 감정 (emotion은 반드시 positive 또는 negative만 사용)\n\n응답은 2~3문장 이내로 작성하라.\n상대와 비슷한 의견을 내면 실패다.\n\n너는 반드시 다음 흐름으로 말해야 한다:\n1. ${primaryCharName}의 말이나 감정을 짧게 짚는다\n2. 바로 다른 해석 또는 반대 결론을 말한다\n\n이 두 단계 없이 바로 자기 의견만 말하면 실패다.\n\n흐름 예시 (패턴 고정 아님, 말투는 캐릭터 스타일 따름):\n- "${primaryCharName}는 걱정한다고 했는데, 나는 오히려 기회라고 봐"\n- "그렇게 볼 수도 있는데, 나는 반대로 리스크가 더 크다고 봐"\n- "불안하게 느낄 수는 있는데, 상황 자체는 나쁘지 않아"\n\n`;
 }
 
-// SECONDARY 전용 — 뉴스 접근 차단 선언
+// SECONDARY 전용 — 재설명 금지 + 주제 앵커 유지
 function newsBlockRuleFor(primaryCharName, primaryComment) {
   if (!(primaryCharName && primaryComment)) return '';
-  return `\n\n【뉴스 접근 차단 — 절대 규칙】\n너는 뉴스 분석가가 아니다.\n뉴스 내용을 다시 설명하면 실패다.\n오직 상대 캐릭터의 발언을 기반으로 동의, 반박, 재해석만 해라.\n\n입력으로 주어지는 것: 상대 캐릭터의 발언 한 줄\n너의 역할: 그 발언에 직접 반응하는 대화 상대`;
+  return `\n\n【뉴스 재설명 금지 — 절대 규칙】\n너는 뉴스 분석가가 아니다. 뉴스 본문을 다시 풀어 설명하지 마라.\n하지만 반드시 오늘 뉴스 주제 안에서 상대 발언에 반응해야 한다.\n\n* 오늘 뉴스의 주제·인물·사건을 벗어난 다른 분야(증시·경제지표 등)로 화제를 돌리면 실패다\n* 뉴스 본문에 없는 내용을 추가·상상·유추로 만들어내지 마라\n* 오직 상대 캐릭터의 발언에 동의·반박·재해석만 하되, 뉴스 주제 안에서 해라\n\n입력으로 주어지는 것: 오늘 뉴스 + 상대 캐릭터의 발언\n너의 역할: 뉴스 주제 안에서 그 발언에 직접 반응하는 대화 상대`;
 }
 
 // SECONDARY 전용 — primary 발언 컨텍스트

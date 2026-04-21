@@ -121,7 +121,7 @@ describe('buildSystemPrompt — 구조적 불변식 (리팩터링 가드)', () =
     expect(out).not.toContain('【출력 규칙】');
   });
 
-  test('SECONDARY 는 primaryComment 포함 + newsDetailBlock 제외', async () => {
+  test('SECONDARY 는 primaryComment + newsDetailBlock 둘 다 포함 (주제 앵커 유지)', async () => {
     const out = await buildSystemPrompt('하나', null, {
       primaryCharName: '준혁',
       primaryComment:  '리스크 있어.',
@@ -130,7 +130,8 @@ describe('buildSystemPrompt — 구조적 불변식 (리팩터링 가드)', () =
       messages:        NEWS_CONVERSE_MESSAGES,
     });
     expect(out).toContain('"리스크 있어."');
-    expect(out).not.toContain('<<<NEWS_START>>>');
+    expect(out).toContain('<<<NEWS_START>>>');
+    expect(out).toContain('【뉴스 재설명 금지 — 절대 규칙】');
   });
 
   test('CONVERSE 는 newsDetailBlock + primaryDirection 포함', async () => {

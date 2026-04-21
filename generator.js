@@ -62,14 +62,12 @@ async function buildSystemPrompt(character, memory, {
   const persona = getPersona(character);
   const activeBasePrompt = basePromptFor(persona, { isMourning, primaryCharName, isOpinion });
 
-  // SECONDARY 는 뉴스 본문 스킵 (상대 발언에만 반응)
+  // SECONDARY 도 뉴스 detail 을 받아야 주제 앵커가 유지됨 (재설명 금지는 newsBlockRule 에서 처리)
   let newsDetailBlock = '';
-  if (!primaryCharName) {
-    try {
-      const news = await getTodayNews();
-      newsDetailBlock = newsDetailBlockFor(news);
-    } catch {}
-  }
+  try {
+    const news = await getTodayNews();
+    newsDetailBlock = newsDetailBlockFor(news);
+  } catch {}
 
   // 조건부 블록 — 빌더 내부에서 가드하므로 여기서는 그냥 호출
   const sessionStanceRule     = sessionStanceRuleFor(characterEmotion, isMourning, character);
