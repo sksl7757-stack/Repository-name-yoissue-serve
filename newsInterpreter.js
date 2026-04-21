@@ -11,7 +11,7 @@
 'use strict';
 
 // ── GPT 호출 헬퍼 ──────────────────────────────────────────────────────────────
-async function callGPT(systemMsg, userMsg, maxTokens = 150) {
+async function callGPT(systemMsg, userMsg, maxTokens = 150, signal) {
   const key = (process.env.OPENAI_API_KEY || '').replace(/['"]/g, '').trim();
   const res = await fetch('https://api.openai.com/v1/chat/completions', {
     method: 'POST',
@@ -28,6 +28,7 @@ async function callGPT(systemMsg, userMsg, maxTokens = 150) {
         { role: 'user',   content: userMsg   },
       ],
     }),
+    signal,
   });
   const data = await res.json();
   if (data.error) throw new Error('GPT 오류: ' + data.error.message);
@@ -239,7 +240,33 @@ ${MOURNING_RULES}
 
 Return ONLY JSON: {"is_mourning_required": true} or {"is_mourning_required": false}`;
   const userMsg = `Title: ${title}${summary ? `\nDetail: ${summary}` : ''}`;
-  const raw = await callGPT(systemMsg, userMsg, 50);
+
+  // 타임아웃 시 참사 오판(false fallback) 위험 — 1회 재시도 후에도 실패하면 throw.
+  const TIMEOUT_MS = 10_000;
+  async function attempt() {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
+    try {
+      return await callGPT(systemMsg, userMsg, 50, controller.signal);
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  let raw;
+  try {
+    raw = await attempt();
+  } catch (e) {
+    if (e.name !== 'AbortError') throw e;
+    console.warn(`[classifyMourning] ⚠ OpenAI 호출 타임아웃 ${TIMEOUT_MS}ms — 제목="${title.slice(0, 60)}" — 1회 재시도`);
+    try {
+      raw = await attempt();
+    } catch (e2) {
+      if (e2.name === 'AbortError') throw new Error(`classifyMourning 타임아웃 재시도 실패 (${TIMEOUT_MS}ms x2)`);
+      throw e2;
+    }
+  }
+
   const parsed = safeJsonParse(raw);
   return Boolean(parsed.is_mourning_required);
 }
