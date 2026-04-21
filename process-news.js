@@ -557,16 +557,51 @@ async function main() {
     is_mourning_required,
   };
 
-  const { error: insertErr } = await supabase.from('news_processed').insert(record);
-  if (insertErr) console.error('  news_processed 저장 오류:', insertErr.message);
-  else console.log('  news_processed 저장 완료');
+  // 원자적 저장: 둘 다 성공해야 markAllProcessed 실행 (부분 실패 시 raw 미처리 유지 → 다음 cron 재시도).
+  // Supabase REST는 다중 테이블 트랜잭션 미지원 — news_processed 선저장 후 daily_news 실패 시 보상 롤백.
 
-  const { error: dailyErr } = await supabase.from('daily_news').upsert(record, { onConflict: 'date' });
-  if (dailyErr) console.error('  daily_news 저장 오류:', dailyErr.message);
-  else console.log('  daily_news 저장 완료');
+  // 재실행 감지: raw가 여전히 미처리인데 오늘 news_processed 행이 있다 = 이전 실패 잔재 (프로세스 킬 등).
+  // 이 블록 도달 시점에 raw.processed=false 이므로 오늘 news_processed 행은 고아 확정 → 정리.
+  const { data: stale } = await supabase
+    .from('news_processed')
+    .select('id')
+    .eq('date', today);
+  if (stale && stale.length > 0) {
+    console.warn(`  [재실행 감지] 이전 실패 잔재 news_processed ${stale.length}건 정리`);
+    await supabase.from('news_processed').delete().eq('date', today);
+  }
 
+  const { data: inserted, error: insertErr } = await supabase
+    .from('news_processed')
+    .insert(record)
+    .select('id')
+    .single();
 
-  // 11. news_raw 전체 처리 완료 표시
+  if (insertErr) {
+    throw new Error('news_processed 저장 실패 — abort: ' + insertErr.message);
+  }
+  console.log(`  news_processed 저장 완료 (id=${inserted.id})`);
+
+  const { error: dailyErr } = await supabase
+    .from('daily_news')
+    .upsert(record, { onConflict: 'date' });
+
+  if (dailyErr) {
+    console.error('  ❌ daily_news 저장 실패 — news_processed 롤백 시도:', dailyErr.message);
+    const { error: rollbackErr } = await supabase
+      .from('news_processed')
+      .delete()
+      .eq('id', inserted.id);
+    if (rollbackErr) {
+      console.error(`  ⚠⚠ 롤백 실패 — 수동 정리 필요 news_processed.id=${inserted.id}:`, rollbackErr.message);
+    } else {
+      console.log('  news_processed 롤백 완료');
+    }
+    throw new Error('daily_news 저장 실패: ' + dailyErr.message);
+  }
+  console.log('  daily_news 저장 완료');
+
+  // 둘 다 성공 — news_raw 처리 표시
   await markAllProcessed(rawRows);
 
   console.log(`✅ [Stage 2] 완료: ${Date.now() - start}ms`);
