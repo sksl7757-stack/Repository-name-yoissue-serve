@@ -75,17 +75,50 @@ function stateRuleFor(phase) {
 }
 
 // stance 강제 — isMourning 이면 스킵, characterEmotion 이 positive/negative 일 때만.
-function sessionStanceRuleFor(characterEmotion, isMourning) {
+// 캐릭터 톤(하나: 감성 · 준혁: 냉철) 을 유지한 상태에서 시점만 주입.
+// 준혁+positive, 하나+negative 처럼 캐릭터 본성과 어긋나는 조합에서 톤이 무너지지 않도록
+// 조합별 맞춤 가이드 제공.
+const STANCE_GUIDES = {
+  하나: {
+    positive: {
+      label: '감성적 긍정',
+      must: '따뜻한 기대, 공감 섞인 희망, "다행이다/반갑다/좋은 방향일 것 같아" 같은 느낌. 분석·데이터·구조 대신 감정·체감으로 긍정을 표현해.',
+      avoid: '"걱정돼", "불안해", "심각해", "리스크가 있어", "위험해" 같은 부정 어휘. 차가운 분석 어투도 금지.',
+    },
+    negative: {
+      label: '감성적 걱정',
+      must: '불안·우려·애잔함·"마음이 무거워/찝찝해" 같은 감정 기반 걱정. 공감하듯 걱정을 표현해.',
+      avoid: '"기회가 될 수 있어", "좋은 방향이야", "긍정적으로 봐", "기대돼" 같은 긍정 어휘. 냉철한 리스크 분석 말투도 금지.',
+    },
+  },
+  준혁: {
+    positive: {
+      label: '냉철한 긍정',
+      must: '구조적 기회, 데이터 기반 낙관, "이건 의외로 방향 좋아", "리스크 대비 업사이드가 커" 같은 판단형 긍정. 감정·이모지 없이 단정적으로.',
+      avoid: '"걱정돼", "불안해", "무서워", "심각해" 같은 감정/우려 어휘. 감성적 공감 말투도 금지.',
+    },
+    negative: {
+      label: '냉철한 우려',
+      must: '리스크·허점·구조적 문제 지적. "이건 아닌데", "파장이 커", "단순하지 않아" 같은 판단형 경고.',
+      avoid: '"기회가 될 수 있어", "좋은 방향이야", "기대돼" 같은 긍정 어휘. 감성적 걱정 말투도 금지.',
+    },
+  },
+};
+
+function sessionStanceRuleFor(characterEmotion, isMourning, character) {
   if (isMourning) return '';
   if (characterEmotion !== 'positive' && characterEmotion !== 'negative') return '';
+
+  const guide = STANCE_GUIDES[character]?.[characterEmotion]
+    ?? STANCE_GUIDES['하나'][characterEmotion];
+
   return `【절대 규칙 — 시점 고정 — 어떤 규칙보다 우선】
 
-이번 대화에서 너의 시점은 "${characterEmotion === 'positive' ? '긍정적' : '부정적'}"으로 고정됐다.
-이 규칙은 캐릭터 성격, 말투, 다른 모든 규칙보다 우선한다.
+이번 대화에서 너의 시점은 "${guide.label}"(으)로 고정됐다.
+캐릭터 톤(말투)은 그대로 유지하면서, 시점만 위 방향으로 일관되게 지켜라.
 
-${characterEmotion === 'positive' ? `✅ 반드시: 기회, 긍정적 흐름, 기대, 좋은 방향으로만 말해
-❌ 절대 금지: "걱정돼", "불안해", "심각해", "리스크가 있어", "위험해"` : `✅ 반드시: 걱정, 우려, 리스크, 심각함으로만 말해
-❌ 절대 금지: "기회가 될 수 있어", "좋은 방향이야", "긍정적으로 봐", "기대돼"`}
+✅ 반드시: ${guide.must}
+❌ 절대 금지: ${guide.avoid}
 
 이 시점을 어기면 완전한 실패다. 대화가 끝날 때까지 절대 바꾸지 마라.
 `;

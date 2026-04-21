@@ -156,4 +156,23 @@ describe('buildSystemPrompt — 구조적 불변식 (리팩터링 가드)', () =
     expect(withStance).toContain('시점 고정');
     expect(withoutStance).not.toContain('시점 고정');
   });
+
+  test('sessionStance 는 캐릭터 × emotion 조합으로 분기', async () => {
+    const hanaPos = await buildSystemPrompt('하나', null, {
+      phase: 'CHAT', characterEmotion: 'positive', messages: NEWS_CONVERSE_MESSAGES,
+    });
+    const junPos = await buildSystemPrompt('준혁', null, {
+      phase: 'CHAT', characterEmotion: 'positive', messages: NEWS_CONVERSE_MESSAGES,
+    });
+    const hanaNeg = await buildSystemPrompt('하나', null, {
+      phase: 'CHAT', characterEmotion: 'negative', messages: NEWS_CONVERSE_MESSAGES,
+    });
+    const junNeg = await buildSystemPrompt('준혁', null, {
+      phase: 'CHAT', characterEmotion: 'negative', messages: NEWS_CONVERSE_MESSAGES,
+    });
+    expect(hanaPos).toContain('감성적 긍정');
+    expect(junPos).toContain('냉철한 긍정');
+    expect(hanaNeg).toContain('감성적 걱정');
+    expect(junNeg).toContain('냉철한 우려');
+  });
 });

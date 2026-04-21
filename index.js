@@ -413,7 +413,7 @@ app.post('/chat', llmLimiter, async (req, res) => {
 
     sse('turn_start', { character: first });
     let firstText = '';
-    for await (const chunk of parseOpenAIStream(await generateReplyStream(firstSystemPrompt, messages))) {
+    for await (const chunk of parseOpenAIStream(await generateReplyStream(firstSystemPrompt, messages, first))) {
       const token = chunk.choices?.[0]?.delta?.content || '';
       if (token) { firstText += token; sse('token', { character: first, token }); }
     }
@@ -435,7 +435,7 @@ app.post('/chat', llmLimiter, async (req, res) => {
 
       sse('turn_start', { character: second });
       let secondText = '';
-      for await (const chunk of parseOpenAIStream(await generateReplyStream(secondSystemPrompt, messages))) {
+      for await (const chunk of parseOpenAIStream(await generateReplyStream(secondSystemPrompt, messages, second))) {
         const token = chunk.choices?.[0]?.delta?.content || '';
         if (token) { secondText += token; sse('token', { character: second, token }); }
       }

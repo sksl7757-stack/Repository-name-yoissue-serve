@@ -72,7 +72,7 @@ async function buildSystemPrompt(character, memory, {
   }
 
   // 조건부 블록 — 빌더 내부에서 가드하므로 여기서는 그냥 호출
-  const sessionStanceRule     = sessionStanceRuleFor(characterEmotion, isMourning);
+  const sessionStanceRule     = sessionStanceRuleFor(characterEmotion, isMourning, character);
   const secondaryFormatRule   = secondaryFormatRuleFor(primaryCharName, primaryComment, primaryEmotion);
   const secondaryContextBlock = secondaryContextBlockFor(primaryCharName, primaryComment);
   const newsBlockRule         = newsBlockRuleFor(primaryCharName, primaryComment);
@@ -122,6 +122,19 @@ async function buildSystemPrompt(character, memory, {
 
 const VALID_EMOTIONS = new Set(['positive', 'negative', 'neutral']);
 
+// 캐릭터별 max_tokens — 하나는 감성 디테일용으로 길게, 준혁은 단호함 강조로 짧게
+const MAX_TOKENS_BY_CHAR = { '하나': 400, '준혁': 250 };
+function maxTokensFor(character) {
+  return MAX_TOKENS_BY_CHAR[character] ?? 350;
+}
+
+// 말투 일관성 강화용 공통 파라미터
+const STYLE_PARAMS = {
+  temperature: 0.9,
+  frequency_penalty: 0.3,
+  presence_penalty: 0.2,
+};
+
 async function generateReply({ character, messages, memory, perspectiveStep = 0, isPerspectiveRequest = false, phase = 'INIT', primaryCharName = null, primaryComment = null, primaryEmotion = null, characterEmotion = null, isMourning = false }) {
   const OPENAI_KEY = process.env.OPENAI_API_KEY?.replace(/['"]/g, '');
   // MOURNING 모드는 emotion 필드를 neutral 고정으로 받아도 상관없음 (프론트에서 항상 worry 이미지 사용)
@@ -135,7 +148,8 @@ async function generateReply({ character, messages, memory, perspectiveStep = 0,
     },
     body: JSON.stringify({
       model: 'gpt-4o-mini',
-      max_tokens: 350,
+      max_tokens: maxTokensFor(character),
+      ...STYLE_PARAMS,
       response_format: { type: 'json_object' },
       messages: [
         { role: 'system', content: systemPrompt },
@@ -169,7 +183,7 @@ async function generateReply({ character, messages, memory, perspectiveStep = 0,
   return { text, emotion };
 }
 
-async function generateReplyStream(systemPrompt, messages) {
+async function generateReplyStream(systemPrompt, messages, character = null) {
   const OPENAI_KEY = process.env.OPENAI_API_KEY?.replace(/['"]/g, '');
   const response = await fetch('https://api.openai.com/v1/chat/completions', {
     method: 'POST',
@@ -179,7 +193,8 @@ async function generateReplyStream(systemPrompt, messages) {
     },
     body: JSON.stringify({
       model: 'gpt-4o-mini',
-      max_tokens: 350,
+      max_tokens: maxTokensFor(character),
+      ...STYLE_PARAMS,
       stream: true,
       messages: [
         { role: 'system', content: systemPrompt + '\n\n캐릭터 대화문만 출력해. JSON 형식 불필요.' },
