@@ -5,3 +5,4 @@ node_modules
 .poll-generate.lock
 news-history.json
 lora-training/
+.claude/
