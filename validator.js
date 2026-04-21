@@ -36,11 +36,18 @@ function stripQuestions(text) {
  *
  * INIT → LLM 질문 제거 후 코드 고정 질문을 별도 필드로 반환
  * CHAT → 질문 문장 무조건 제거, question = null
+ * 추모 모드(isMourning=true) → 대립 구도 자체를 만들지 않으므로 FORCED_QUESTIONS 주입 스킵.
+ *   phase와 무관하게 question=null 반환.
  *
- * @param {{ reply: string, phase: string, character: string }}
+ * @param {{ reply: string, phase: string, character: string, isMourning?: boolean }}
  * @returns {{ message: string, question: string|null }}
  */
-function validate({ reply, phase, character }) {
+function validate({ reply, phase, character, isMourning = false }) {
+  // 추모 모드 → FORCED_QUESTIONS 주입 금지, 긴 질문만 정리 후 반환
+  if (isMourning) {
+    return { message: stripQuestions(reply), question: null };
+  }
+
   // INIT → 설명(message) + 고정 질문(question) 분리 반환
   if (phase === PHASE.INIT) {
     const message = stripQuestions(reply);

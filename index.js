@@ -82,11 +82,15 @@ const OPENING_MESSAGES = {
 };
 
 app.post('/chat-opening', async (req, res) => {
-  const { character, memory } = req.body;
+  const { character, memory, isMourning = false } = req.body;
   try {
     const OPENAI_KEY = process.env.OPENAI_API_KEY?.replace(/['"]/g, '');
-    const baseSystem = buildSystemPrompt(character, memory, { phase: 'INIT' });
-    const systemWithFormat = baseSystem + `\n\n【출력 형식】 아래 JSON으로만 반환. 다른 텍스트 없이:\n{"opening": "뉴스 보기 전 궁금증 유발 한 줄", "comment": "뉴스 카드 본 후 생활 영향/공감 한 줄. 반드시 유저가 자연스럽게 대답하고 싶어지는 열린 질문으로 끝낼 것."}`;
+    const baseSystem = await buildSystemPrompt(character, memory, { phase: 'INIT', isMourning });
+    // 추모 모드에서는 질문 유도 금지 — 조용히 함께 있는 톤
+    const formatRule = isMourning
+      ? `\n\n【출력 형식】 아래 JSON으로만 반환. 다른 텍스트 없이:\n{"opening": "뉴스 보기 전 조용히 안부 전하는 한 줄 (질문 금지)", "comment": "뉴스 카드 본 후 함께 아파하는 한 줄 (질문 금지, 물음표 금지)"}`
+      : `\n\n【출력 형식】 아래 JSON으로만 반환. 다른 텍스트 없이:\n{"opening": "뉴스 보기 전 궁금증 유발 한 줄", "comment": "뉴스 카드 본 후 생활 영향/공감 한 줄. 반드시 유저가 자연스럽게 대답하고 싶어지는 열린 질문으로 끝낼 것."}`;
+    const systemWithFormat = baseSystem + formatRule;
 
     const response = await fetch('https://api.openai.com/v1/chat/completions', {
       method: 'POST',
@@ -222,14 +226,24 @@ async function decideResponders(messages, primaryChar, secondaryChar, emotionCon
 
 // /chat-init — 앱 시작 시 첫 코멘트용 (일반 JSON 응답)
 app.post('/chat-init', async (req, res) => {
-  const { character, messages: rawMessages, memory, characterEmotion, secondaryChar, secondaryEmotion } = req.body;
+  const { character, messages: rawMessages, memory, characterEmotion, secondaryChar, secondaryEmotion, isMourning = false } = req.body;
   const messages = sanitizeMessages(rawMessages);
   try {
+    const primaryRaw      = await generateReply({ character, messages, memory, phase: 'INIT', characterEmotion, isMourning });
+    const primaryValidated = validate({ reply: primaryRaw.text, phase: 'INIT', character, isMourning });
+
+    // 추모 모드: primary 1명만 반환, 질문 스킵
+    if (isMourning) {
+      res.json({
+        turns: [
+          { character, message: primaryValidated.message, emotion: 'neutral' },
+        ],
+        question: null,
+      });
+      return;
+    }
+
     const secChar = secondaryChar || (character === '하나' ? '준혁' : '하나');
-
-    const primaryRaw      = await generateReply({ character, messages, memory, phase: 'INIT', characterEmotion });
-    const primaryValidated = validate({ reply: primaryRaw.text, phase: 'INIT', character });
-
     const secEmotion = secondaryEmotion || (primaryRaw.emotion === 'positive' ? 'negative' : 'positive');
     const secondaryRaw      = await generateReply({ character: secChar, messages, memory, phase: 'INIT', primaryCharName: character, primaryComment: primaryValidated.message, primaryEmotion: primaryRaw.emotion, characterEmotion: secEmotion });
     const secondaryValidated = validate({ reply: secondaryRaw.text, phase: 'CHAT', character: secChar });
@@ -254,7 +268,7 @@ app.post('/chat', async (req, res) => {
 
   const sse = (event, data) => res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
 
-  const { type, messages: rawMessages, character, memory, perspectiveStep = 0, characterEmotion = null, secondaryEmotion = null, secondaryChar: reqSecondaryChar = null, choiceDone = false, turnCount = 0 } = req.body;
+  const { type, messages: rawMessages, character, memory, perspectiveStep = 0, characterEmotion = null, secondaryEmotion = null, secondaryChar: reqSecondaryChar = null, choiceDone = false, turnCount = 0, isMourning = false } = req.body;
   const messages = sanitizeMessages(rawMessages);
 
   // 클라이언트가 보낸 대화 상태 → 서버가 신뢰할 수 있는 instruction으로 변환
@@ -293,16 +307,27 @@ app.post('/chat', async (req, res) => {
     // ── 일반 채팅 ──────────────────────────────────────────────────────────────
     const primaryChar    = character;
     const secondaryChar  = reqSecondaryChar || (character === '하나' ? '준혁' : '하나');
-    const emotionContext = { primary: characterEmotion, secondary: secondaryEmotion };
-    const { first, second } = await decideResponders(messages, primaryChar, secondaryChar, emotionContext);
     const { phase, questionAsked } = getState(messages, perspectiveStep);
 
-    const firstEmotion  = first  === primaryChar ? characterEmotion : (secondaryEmotion || (characterEmotion === 'positive' ? 'negative' : 'positive'));
-    const secondEmotion = second === primaryChar ? characterEmotion : (secondaryEmotion || (characterEmotion === 'positive' ? 'negative' : 'positive'));
+    // MOURNING 모드: 항상 primary 단독 응답, decideResponders/stance 전부 우회
+    let first, second, firstEmotion, secondEmotion;
+    if (isMourning) {
+      first = primaryChar;
+      second = null;
+      firstEmotion = null;
+      secondEmotion = null;
+    } else {
+      const emotionContext = { primary: characterEmotion, secondary: secondaryEmotion };
+      const decided = await decideResponders(messages, primaryChar, secondaryChar, emotionContext);
+      first = decided.first;
+      second = decided.second;
+      firstEmotion  = first  === primaryChar ? characterEmotion : (secondaryEmotion || (characterEmotion === 'positive' ? 'negative' : 'positive'));
+      secondEmotion = second === primaryChar ? characterEmotion : (secondaryEmotion || (characterEmotion === 'positive' ? 'negative' : 'positive'));
+    }
 
     // 첫 번째 캐릭터 스트리밍
-    console.log('[stance-in]', first, '→', firstEmotion);
-    const firstSystemPrompt = (await buildSystemPrompt(first, memory, { perspectiveStep, phase, primaryCharName: null, primaryComment: null, primaryEmotion: null, messages, characterEmotion: firstEmotion })) + conversationHints;
+    console.log('[stance-in]', first, '→', firstEmotion, '| isMourning:', isMourning);
+    const firstSystemPrompt = (await buildSystemPrompt(first, memory, { perspectiveStep, phase, primaryCharName: null, primaryComment: null, primaryEmotion: null, messages, characterEmotion: firstEmotion, isMourning })) + conversationHints;
 
     sse('turn_start', { character: first });
     let firstText = '';
@@ -311,7 +336,7 @@ app.post('/chat', async (req, res) => {
       if (token) { firstText += token; sse('token', { character: first, token }); }
     }
 
-    const firstValidated = validate({ reply: firstText, phase, character: first });
+    const firstValidated = validate({ reply: firstText, phase, character: first, isMourning });
     console.log('first reply:', firstValidated.message?.slice(0, 80));
     const OFF_TOPIC_PATTERNS = ['오늘 뉴스 얘기', '오늘 주제 아님', '그건 내가 답하기', '뉴스 관련 얘기만', '다른 얘기는'];
     const firstOffTopic = OFF_TOPIC_PATTERNS.some(p => firstValidated.message?.includes(p));

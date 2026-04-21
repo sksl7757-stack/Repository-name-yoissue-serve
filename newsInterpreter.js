@@ -45,6 +45,47 @@ function safeJsonParse(raw) {
   }
 }
 
+// ── 추모/재난 판정 규칙 (interpretNews + classifyMourning 공유) ────────────────
+const MOURNING_RULES = `Answer: "Would generating a positive/celebratory image of this news hurt victims, families, or survivors?"
+
+TRUE (mourning required):
+- Deaths, disasters, accidents, tragedies, memorial ceremonies, terror attacks, mass casualties
+- Suicide / self-harm reports
+- Sexual crime victims (especially minors)
+- Child / youth abuse, domestic violence victims
+- Civilian war casualties, refugee tragedies
+- Pandemic / epidemic mass deaths
+- Ongoing missing / kidnapping cases
+- Death of publicly respected figures due to illness / accident (posthumous news)
+
+FALSE (normal positive/negative interpretation OK):
+- Political news, economic news, business news, cultural / sports events
+- Arrest / prosecution of perpetrators (even if the original crime was tragic)
+- Death of dictators, war criminals, notorious criminals
+- Enemy combatant deaths in declared military operations
+- Natural death of elderly public figures without tragic context
+- Legal / policy changes responding to past tragedies (unless the coverage centers on victims)
+
+Examples:
+  "세월호 참사 12주기"              → true
+  "이태원 참사 추모식"              → true
+  "교통사고 사망자 5명"             → true
+  "유명 배우 자택서 숨진 채 발견"   → true  (suspected suicide coverage)
+  "학교폭력 피해 학생 극단 선택"    → true
+  "아동 성범죄 피해 사례 급증"      → true
+  "가정폭력 피해 쉼터 운영 중단"    → true
+  "우크라이나 민간인 사상자 속출"   → true
+  "감염병 사망자 1만 명 돌파"       → true
+  "실종 7세 아동 사흘째 수색"       → true
+  "국립대 교수 투병 중 별세"        → true
+  "아동 성범죄 가해자 구속"         → false  (perpetrator arrest)
+  "세월호 관련 재판 시작"           → false  (legal proceeding, not victim-centered)
+  "독재자 사망"                     → false
+  "연쇄살인범 검거"                 → false
+  "전직 대통령 자연사 (고령)"       → false
+  "삼성전자 주가 폭락"              → false
+  "대통령 탄핵 가결"                → false`;
+
 // ── News Interpreter Agent ────────────────────────────────────────────────────
 async function interpretNews({ category, newsTitle, newsSummary = '' }) {
   const systemMsg = `You are a visual scene generator for FLUX image generation model.
@@ -99,18 +140,7 @@ FIELD DEFINITIONS:
 news_core — one-sentence summary of the news event
 
 is_mourning_required — boolean
-Answer: "Would generating a positive/celebratory image of this news hurt victims, families, or survivors?"
-- true: news about deaths, disasters, accidents, tragedies, memorials, terror attacks, mass casualties, mourning events
-- false: political news, economic news, business news, normal events
-Examples:
-  "세월호 참사 12주기" → true
-  "이태원 참사 추모식" → true
-  "교통사고 사망자 5명" → true
-  "대학교수 별세" → true
-  "독재자 사망" → false
-  "연쇄살인범 검거" → false
-  "삼성전자 주가 폭락" → false
-  "대통령 탄핵 가결" → false
+${MOURNING_RULES}
 GOOD: "KOSPI index broke above 6200 for the first time after Iran war fears eased"
 
 location — brief background setting (subordinate to action)
@@ -201,4 +231,17 @@ ALL fields must be in English. Return ONLY JSON.`;
   return safeJsonParse(raw);
 }
 
-module.exports = { interpretNews };
+// ── Mourning 단독 판정 (process-news.js에서 뉴스 저장 시 사용) ──────────────────
+async function classifyMourning({ title, summary = '' }) {
+  const systemMsg = `You classify Korean news headlines for whether they require mourning tone.
+
+${MOURNING_RULES}
+
+Return ONLY JSON: {"is_mourning_required": true} or {"is_mourning_required": false}`;
+  const userMsg = `Title: ${title}${summary ? `\nDetail: ${summary}` : ''}`;
+  const raw = await callGPT(systemMsg, userMsg, 50);
+  const parsed = safeJsonParse(raw);
+  return Boolean(parsed.is_mourning_required);
+}
+
+module.exports = { interpretNews, classifyMourning };

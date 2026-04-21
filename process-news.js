@@ -7,6 +7,7 @@ const { supabase }         = require('./supabase');
 const { loadHistory } = require('./historyStore');
 const { stripHtml }        = require('./stripHtml');
 const { todayKST, mmddKST } = require('./dateUtil');
+const { classifyMourning } = require('./newsInterpreter');
 
 loadEnv();
 
@@ -520,7 +521,26 @@ async function main() {
   // 9. news_processed + daily_news 저장
   const tag      = memorial ? '오늘의 픽 · 추모' : inferTag(best);
   const category = tag.replace('오늘의 픽 · ', '').trim();
-  const record   = {
+  const summary  = makeSummary(best.content);
+
+  // 추모/재난 판정: memorial 강제 선정이면 무조건 true, 아니면 GPT 판정
+  let is_mourning_required = false;
+  if (memorial) {
+    is_mourning_required = true;
+    console.log('  is_mourning_required=true (memorial 강제 선정)');
+  } else {
+    try {
+      is_mourning_required = await classifyMourning({
+        title: best.title,
+        summary: Array.isArray(summary) ? summary.join(' ') : String(summary || ''),
+      });
+      console.log(`  is_mourning_required=${is_mourning_required} (GPT 판정)`);
+    } catch (e) {
+      console.warn('  classifyMourning 실패, false로 기본:', e.message);
+    }
+  }
+
+  const record = {
     date:      today,
     title:     best.title,
     url:       best.url,
@@ -528,12 +548,13 @@ async function main() {
     category,
     tag,
     emoji:     inferEmoji(tag),
-    summary:   makeSummary(best.content),
+    summary,
     source:    inferSource(best.url),
     link:      best.url,
     score:     selected.finalScore,
     pushed:    false,
     analysis:  {},
+    is_mourning_required,
   };
 
   const { error: insertErr } = await supabase.from('news_processed').insert(record);

@@ -109,7 +109,7 @@ async function clearStorageForDate(date) {
 async function getTodayNews() {
   const { data, error } = await supabase
     .from('daily_news')
-    .select('date, title, category, summary, content')
+    .select('date, title, category, summary, content, is_mourning_required')
     .eq('date', today())
     .maybeSingle();
   if (error) throw new Error('daily_news 조회 오류: ' + error.message);
@@ -231,20 +231,23 @@ async function runOnce() {
     const bodyText = news.content && news.content.length >= 100 ? news.content : summaryText;
     interpretation = await interpretNews({ category: news.category, newsTitle: news.title, newsSummary: bodyText });
     console.log(`  해석 완료: ${interpretation.news_core}`);
-    if (interpretation.is_mourning_required) {
-      console.log(`  ⚠️  is_mourning_required=true — positive 이미지 스킵`);
-    }
   } catch (e) {
     console.error('  interpretNews 실패:', e.message);
     return;
   }
 
+  // DB 플래그 우선, 없으면 interpretNews GPT 판정 폴백
+  const mourning = news.is_mourning_required ?? interpretation.is_mourning_required ?? false;
+  if (mourning) {
+    console.log(`  ⚠️  is_mourning_required=true — positive/unsure 이미지 스킵`);
+  }
+
   // 3. 각 조합에 대해 Storage 직접 확인 후 생성/스킵
-  // is_mourning_required=true 이면 positive emotion 조합 제외
-  const effectiveCombos = interpretation.is_mourning_required
+  // is_mourning_required=true 이면 positive/unsure emotion 조합 제외
+  const effectiveCombos = mourning
     ? IMAGE_COMBOS.filter(c => c.emotion !== 'positive' && c.emotion !== 'unsure')
     : IMAGE_COMBOS;
-  console.log(`📊 이미지 생성 시작 — 총 ${effectiveCombos.length}개 조합${interpretation.is_mourning_required ? ' (positive/unsure 제외)' : ''}`);
+  console.log(`📊 이미지 생성 시작 — 총 ${effectiveCombos.length}개 조합${mourning ? ' (positive/unsure 제외)' : ''}`);
   const results = [];
   let count = 0;
   for (const combo of effectiveCombos) {
