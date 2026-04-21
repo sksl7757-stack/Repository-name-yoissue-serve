@@ -6,6 +6,7 @@ const { loadEnv }          = require('./loadEnv');
 const { supabase }         = require('./supabase');
 const { loadHistory } = require('./historyStore');
 const { stripHtml }        = require('./stripHtml');
+const { todayKST, mmddKST } = require('./dateUtil');
 
 loadEnv();
 
@@ -24,7 +25,7 @@ const MEMORIAL_TITLE_WORDS   = ['추모', '기념', '기억', '분향', '헌화'
 const MEMORIAL_CONTENT_WORDS = ['희생자', '유가족', '추모식', '기억식', '묵념'];
 
 function getTodayMemorial() {
-  const mmdd = new Date().toISOString().slice(5, 10);
+  const mmdd = mmddKST();
   return MEMORIAL_DAYS.find(m => m.mmdd === mmdd) || null;
 }
 
@@ -318,7 +319,7 @@ async function fetchArticleContent(url) {
 // ─── 뉴스 선정 (GPT) ─────────────────────────────────────────────────────────
 
 async function pickBestNews(newsList, history) {
-  const today = new Date().toISOString().slice(0, 10);
+  const today = todayKST();
   const recentTitles = history.slice(0, 7).map(h => h.title);
 
   const candidates = newsList.map((item, i) => ({
@@ -418,7 +419,7 @@ async function main() {
 
   if (!OPENAI_KEY) throw new Error('OPENAI_API_KEY 없음');
 
-  const today    = new Date().toISOString().slice(0, 10);
+  const today    = todayKST();
   const memorial = getTodayMemorial();
 
   // 1. 미처리 뉴스 최대 30건 로드

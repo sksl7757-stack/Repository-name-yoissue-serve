@@ -29,6 +29,7 @@ const { createClient } = require('@supabase/supabase-js');
 const { buildComfyWorkflow } = require('./comfyUtils');
 const { interpretNews }   = require('./newsInterpreter');
 const { buildImagePrompt } = require('./promptBuilder');
+const { todayKST } = require('./dateUtil');
 
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_KEY = process.env.SUPABASE_SERVICE_KEY;
@@ -64,9 +65,7 @@ const IMAGE_COMBOS = CHARACTERS.flatMap(({ charKey, character }) => [
 ]);
 
 // ── 유틸 ────────────────────────────────────────────────────────────────────────
-function today() {
-  return new Date().toISOString().slice(0, 10); // YYYY-MM-DD
-}
+const today = todayKST; // KST 기준 YYYY-MM-DD
 
 // {날짜}/{charKey}/{imageType}/{emotion}/{timestamp}.png
 function storagePath(date, charKey, imageType, emotion) {

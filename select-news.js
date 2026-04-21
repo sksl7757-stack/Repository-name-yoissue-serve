@@ -5,6 +5,7 @@
 const { loadEnv }   = require('./loadEnv');
 const { supabase }  = require('./supabase');
 const { stripHtml } = require('./stripHtml');
+const { todayKST }  = require('./dateUtil');
 
 loadEnv();
 
@@ -192,7 +193,7 @@ async function main() {
 
   if (!NAVER_ID || !NAVER_SECRET) throw new Error('NAVER_CLIENT_ID 또는 NAVER_CLIENT_SECRET 환경변수 없음');
 
-  const today = new Date().toISOString().slice(0, 10);
+  const today = todayKST();
 
   // 1. 키워드별 버킷 수집 + 필터 동시 적용
   const MAX_TOTAL    = 50;

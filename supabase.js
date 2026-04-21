@@ -1,5 +1,6 @@
 // supabase.js — Supabase 클라이언트 싱글톤 (지연 초기화)
 const { createClient } = require('@supabase/supabase-js');
+const { todayKST } = require('./dateUtil');
 
 let _client = null;
 
@@ -25,7 +26,7 @@ const supabase = new Proxy({}, {
  * 없으면 null 반환.
  */
 async function getTodayNews() {
-  const today = new Date().toISOString().slice(0, 10);
+  const today = todayKST();
   const { data, error } = await supabase
     .from('daily_news')
     .select('*')

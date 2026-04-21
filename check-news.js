@@ -2,11 +2,12 @@
 
 const { loadEnv } = require('./loadEnv');
 const { supabase } = require('./supabase');
+const { todayKST } = require('./dateUtil');
 
 loadEnv();
 
 async function main() {
-  const today = new Date().toISOString().slice(0, 10);
+  const today = todayKST();
   console.log(`\n📅 날짜: ${today}\n`);
 
   // news_raw 오늘치 개수

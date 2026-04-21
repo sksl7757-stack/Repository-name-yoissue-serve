@@ -4,6 +4,7 @@
 
 const { loadEnv } = require('./loadEnv');
 const { supabase } = require('./supabase');
+const { todayKST } = require('./dateUtil');
 
 loadEnv();
 
@@ -11,7 +12,7 @@ async function main() {
   const start = Date.now();
   console.log('🚀 [Stage 3] send-push 시작:', new Date().toISOString());
 
-  const today = new Date().toISOString().slice(0, 10);
+  const today = todayKST();
 
   const { data: items, error } = await supabase
     .from('news_processed')
@@ -32,9 +33,13 @@ async function main() {
 
   for (const item of items) {
     try {
+      const apiKey = process.env.API_SHARED_SECRET || '';
       const res = await fetch(`${SERVER_URL}/send-notifications`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          ...(apiKey ? { 'x-api-key': apiKey } : {}),
+        },
         body: JSON.stringify({ title: item.title, tag: item.tag }),
       });
       const data = await res.json();

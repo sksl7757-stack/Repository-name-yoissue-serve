@@ -1,8 +1,9 @@
 require('dotenv').config();
 const { supabase } = require('./supabase');
+const { todayKST } = require('./dateUtil');
 
 (async () => {
-  const today = new Date().toISOString().slice(0, 10);
+  const today = todayKST();
   console.log('오늘 날짜:', today);
 
   // 1. daily_news

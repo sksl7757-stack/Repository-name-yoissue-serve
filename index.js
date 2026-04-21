@@ -16,10 +16,40 @@ const { supabase } = require('./supabase');
 const { buildComfyWorkflow } = require('./comfyUtils');
 const { interpretNews }    = require('./newsInterpreter');
 const { buildImagePrompt } = require('./promptBuilder');
+const { todayKST }         = require('./dateUtil');
 
 const app = express();
 app.use(cors());
-app.use(express.json());
+app.use(express.json({ limit: '256kb' }));
+
+// ── 인증: 공유 비밀 키 (x-api-key 헤더) ───────────────────────────────────────
+// API_SHARED_SECRET 미설정 시 경고 후 통과 (로컬 개발/레거시 호환)
+
+const API_SECRET = process.env.API_SHARED_SECRET || '';
+if (!API_SECRET) {
+  console.warn('[auth] API_SHARED_SECRET 미설정 — 모든 요청 허용 (개발 모드)');
+} else {
+  console.log('[auth] x-api-key 검증 활성화');
+}
+
+app.use((req, res, next) => {
+  if (!API_SECRET) return next();
+  if (req.headers['x-api-key'] === API_SECRET) return next();
+  return res.status(401).json({ error: 'unauthorized' });
+});
+
+// ── 메시지 sanitizer: 클라이언트 주입 방어 ────────────────────────────────────
+// 외부 입력에서 role=system 등 비허용 롤을 차단하고 content를 문자열로 정규화.
+
+const MAX_MSG_LEN = 4000;
+const MAX_MSG_COUNT = 50;
+function sanitizeMessages(raw) {
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .filter(m => m && (m.role === 'user' || m.role === 'assistant') && typeof m.content === 'string')
+    .slice(-MAX_MSG_COUNT)
+    .map(m => ({ role: m.role, content: m.content.slice(0, MAX_MSG_LEN) }));
+}
 
 // ── 푸시 토큰: Supabase push_tokens 테이블 ────────────────────────────────────
 
@@ -192,7 +222,8 @@ async function decideResponders(messages, primaryChar, secondaryChar, emotionCon
 
 // /chat-init — 앱 시작 시 첫 코멘트용 (일반 JSON 응답)
 app.post('/chat-init', async (req, res) => {
-  const { character, messages, memory, characterEmotion, secondaryChar, secondaryEmotion } = req.body;
+  const { character, messages: rawMessages, memory, characterEmotion, secondaryChar, secondaryEmotion } = req.body;
+  const messages = sanitizeMessages(rawMessages);
   try {
     const secChar = secondaryChar || (character === '하나' ? '준혁' : '하나');
 
@@ -223,7 +254,16 @@ app.post('/chat', async (req, res) => {
 
   const sse = (event, data) => res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
 
-  const { type, messages, character, memory, perspectiveStep = 0, characterEmotion = null, secondaryEmotion = null, secondaryChar: reqSecondaryChar = null } = req.body;
+  const { type, messages: rawMessages, character, memory, perspectiveStep = 0, characterEmotion = null, secondaryEmotion = null, secondaryChar: reqSecondaryChar = null, choiceDone = false, turnCount = 0 } = req.body;
+  const messages = sanitizeMessages(rawMessages);
+
+  // 클라이언트가 보낸 대화 상태 → 서버가 신뢰할 수 있는 instruction으로 변환
+  const instructions = [];
+  if (choiceDone)     instructions.push('이제부터는 질문하지 말고 자연스럽게 대화만 이어가.');
+  if (turnCount >= 3) instructions.push('이 대화를 자연스럽게 마무리하는 느낌으로 답해줘. 친근하게 정리하고 끝나는 느낌을 줘.');
+  const conversationHints = instructions.length
+    ? `\n\n【대화 상태 힌트】\n${instructions.join(' ')}`
+    : '';
 
   try {
     // ── PERSPECTIVE_NEXT ────────────────────────────────────────────────────────
@@ -262,7 +302,7 @@ app.post('/chat', async (req, res) => {
 
     // 첫 번째 캐릭터 스트리밍
     console.log('[stance-in]', first, '→', firstEmotion);
-    const firstSystemPrompt = await buildSystemPrompt(first, memory, { perspectiveStep, phase, primaryCharName: null, primaryComment: null, primaryEmotion: null, messages, characterEmotion: firstEmotion });
+    const firstSystemPrompt = (await buildSystemPrompt(first, memory, { perspectiveStep, phase, primaryCharName: null, primaryComment: null, primaryEmotion: null, messages, characterEmotion: firstEmotion })) + conversationHints;
 
     sse('turn_start', { character: first });
     let firstText = '';
@@ -283,7 +323,7 @@ app.post('/chat', async (req, res) => {
       await new Promise(r => setTimeout(r, 600));
       console.log('[second-char]', second, '| primaryComment:', firstValidated.message?.slice(0, 30));
 
-      const secondSystemPrompt = await buildSystemPrompt(second, memory, { perspectiveStep, phase, primaryCharName: first, primaryComment: firstValidated.message, primaryEmotion: firstEmotion, messages, characterEmotion: secondEmotion });
+      const secondSystemPrompt = (await buildSystemPrompt(second, memory, { perspectiveStep, phase, primaryCharName: first, primaryComment: firstValidated.message, primaryEmotion: firstEmotion, messages, characterEmotion: secondEmotion })) + conversationHints;
 
       sse('turn_start', { character: second });
       let secondText = '';
@@ -312,7 +352,8 @@ app.post('/chat', async (req, res) => {
 });
 
 app.post('/analyze-memory', async (req, res) => {
-  const { messages, currentMemory } = req.body;
+  const { messages: rawMessages, currentMemory } = req.body;
+  const messages = sanitizeMessages(rawMessages);
   try {
     const OPENAI_KEY = process.env.OPENAI_API_KEY?.replace(/['"]/g, '');
     const prompt = `너는 사용자 성향 분석 AI야.
@@ -547,7 +588,7 @@ app.post('/start-image-generation', async (req, res) => {
 
   const SD_URL = process.env.COMFY_URL || 'http://localhost:8188';
 
-  const today = new Date().toISOString().slice(0, 10);
+  const today = todayKST();
   const results = [];
 
   // 즉시 응답 후 백그라운드 생성 (이미지 생성은 오래 걸림)
