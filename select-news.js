@@ -131,10 +131,6 @@ function isWeakNews(title) {
   return WEAK_PATTERNS.some(pattern => title.includes(pattern));
 }
 
-function getQueryKey(query) {
-  return query;
-}
-
 // 주요 전국 매체 — 소스 가중치 1.0
 const MAJOR_SOURCES = [
   // 통신사
@@ -196,7 +192,6 @@ async function main() {
   const today = todayKST();
 
   // 1. 키워드별 버킷 수집 + 필터 동시 적용
-  const MAX_TOTAL    = 50;
   const queryBuckets = {};
   const overflowPool = [];
 
@@ -204,8 +199,7 @@ async function main() {
     const maxPerQuery = QUERY_CONFIG[query];
     try {
       const items = await fetchNaverNews(query);
-      const key = getQueryKey(query);
-      if (!queryBuckets[key]) queryBuckets[key] = [];
+      if (!queryBuckets[query]) queryBuckets[query] = [];
 
       for (const raw of items) {
         const title       = stripHtml(raw.title);
@@ -218,38 +212,31 @@ async function main() {
         if (isWeakNews(title)) continue;
 
         const item = { title, description, link };
-        if (queryBuckets[key].length < maxPerQuery) {
-          queryBuckets[key].push(item);
+        if (queryBuckets[query].length < maxPerQuery) {
+          queryBuckets[query].push(item);
         } else {
           overflowPool.push(item);
         }
       }
-      console.log(`  [${query}] ${queryBuckets[key].length}/${maxPerQuery}`);
+      console.log(`  [${query}] ${queryBuckets[query].length}/${maxPerQuery}`);
     } catch (e) {
       console.warn(`  [${query}] 수집 실패:`, e.message);
     }
   }
 
-  // 2. 최종 후보 구성 (키워드별 → overflow 보충 → MAX_TOTAL 컷)
-  let finalItems = [];
-  for (const key in queryBuckets) finalItems.push(...queryBuckets[key]);
-  if (finalItems.length < MAX_TOTAL) {
-    for (const item of overflowPool) {
-      finalItems.push(item);
-      if (finalItems.length >= MAX_TOTAL) break;
-    }
-  }
-  finalItems = finalItems.slice(0, MAX_TOTAL);
+  // 2. 버킷 + overflow 전부 합친 뒤 impact 점수 순 top-30 (MIN_IMPACT 컷 없음 — GPT가 중요도 판단)
+  const allItems = [];
+  for (const key in queryBuckets) allItems.push(...queryBuckets[key]);
+  allItems.push(...overflowPool);
 
-  // 2-1. impact 점수 순 정렬 후 상위 30개 (MIN_IMPACT 컷 제거 — GPT가 직접 중요도 판단)
-  const scored = finalItems.map(item => ({ ...item, impact: scoreImpactTitle(item.title, item.link) }));
+  const scored = allItems.map(item => ({ ...item, impact: scoreImpactTitle(item.title, item.link) }));
   scored.sort((a, b) => b.impact - a.impact);
   const finalSelected = scored.slice(0, 30).map(({ impact, ...rest }) => rest);
-  console.log(`  최종 30개 선정: ${finalSelected.length}건`);
+  console.log(`  스코어링 후 top-30: ${finalSelected.length}건 / 전체 후보 ${allItems.length}건`);
 
   // 3. URL 기준 중복 제거
   const unique = deduplicateByUrl(finalSelected);
-  console.log(`  필터+수집: ${unique.length}건 (버킷합계 ${finalItems.length}건)`);
+  console.log(`  필터+수집: ${unique.length}건`);
 
   if (unique.length === 0) throw new Error('필터링 후 남은 뉴스 없음');
 
