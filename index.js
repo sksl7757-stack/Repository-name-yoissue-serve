@@ -169,7 +169,13 @@ async function decideResponders(messages, primaryChar, secondaryChar, emotionCon
   const lastUserMsg = [...messages].reverse().find(m => m.role === 'user');
   const userText    = (lastUserMsg?.content || '').trim();
 
-  const SHORT_REACTIONS = ['응', 'ㅇㅇ', '헐', '그러게', '대박', '진짜', '엥', 'ㅋㅋ', 'ㅎㅎ'];
+  // 짧은 리액션/동의 — GPT 우회. startsWith 매치 + 6자 이하.
+  // '뭐', '왜', '어', '어떻' 는 의도적으로 제외 (질문은 GPT 라우팅 필요).
+  const SHORT_REACTIONS = [
+    '응', 'ㅇㅇ', '헐', '그러게', '대박', '진짜', '엥', 'ㅋㅋ', 'ㅎㅎ',
+    '맞아', '그래', '그치', '좋아', '좋네', '좋다', '음', '흠',
+    '네', '넵', '예', 'ㅇㅋ', '오케이', '알겠', '오호',
+  ];
   const isShort = userText.length <= 6 && SHORT_REACTIONS.some(r => userText.startsWith(r));
   if (isShort) return Math.random() < 0.3
     ? { first: primaryChar, second: secondaryChar }
@@ -777,8 +783,9 @@ cron.schedule('15 21 * * *', async () => {
   try { await processNews(); } catch (e) { console.error('[크론] process-news 실패:', e.message); }
 });
 
-// 매일 UTC 21:35 — 푸시 알림
-cron.schedule('35 21 * * *', async () => {
+// 매일 UTC 23:00 = KST 08:00 — 푸시 알림
+// process-news(21:15) 뒤 1h45m 여유. 너무 이른 알림(06:35) 피하기 위해 이동.
+cron.schedule('0 23 * * *', async () => {
   console.log('[크론] send-push 시작');
   try { await sendPush(); } catch (e) { console.error('[크론] send-push 실패:', e.message); }
 });
