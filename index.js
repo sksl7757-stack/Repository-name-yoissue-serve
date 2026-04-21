@@ -498,19 +498,39 @@ app.post('/send-notifications', async (req, res) => {
     data: { tag },
   }));
 
-  try {
-    const response = await fetch('https://exp.host/--/api/v2/push/send', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
-      body: JSON.stringify(messages),
-    });
-    const result = await response.json();
-    console.log('푸시 발송 결과:', JSON.stringify(result));
-    res.json({ sent: tokens.length, body });
-  } catch (e) {
-    console.log('푸시 발송 에러:', e.message);
-    res.status(500).json({ error: e.message });
+  // Expo Push API는 요청당 최대 100개 — 초과 시 일부 조용히 드롭됨. 100개 청크로 순차 전송.
+  const CHUNK_SIZE = 100;
+  let sent = 0;
+  const errors = [];
+  for (let i = 0; i < messages.length; i += CHUNK_SIZE) {
+    const chunk = messages.slice(i, i + CHUNK_SIZE);
+    const chunkNo = i / CHUNK_SIZE + 1;
+    try {
+      const response = await fetch('https://exp.host/--/api/v2/push/send', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+        body: JSON.stringify(chunk),
+      });
+      const result = await response.json();
+      // Expo는 4xx/5xx에도 JSON을 반환 — response.ok로 실패 구분 (오탐 방지)
+      if (!response.ok) {
+        const msg = `HTTP ${response.status}: ${JSON.stringify(result).slice(0, 200)}`;
+        console.log(`푸시 청크 ${chunkNo} 실패:`, msg);
+        errors.push(msg);
+        continue;
+      }
+      console.log(`푸시 청크 ${chunkNo} 결과:`, JSON.stringify(result).slice(0, 500));
+      sent += chunk.length;
+    } catch (e) {
+      console.log(`푸시 청크 ${chunkNo} 에러:`, e.message);
+      errors.push(e.message);
+    }
   }
+
+  if (sent === 0 && errors.length > 0) {
+    return res.status(500).json({ error: errors[0], total: messages.length });
+  }
+  res.json({ sent, total: messages.length, errors: errors.length, body });
 });
 
 
