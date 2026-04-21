@@ -33,13 +33,9 @@ async function main() {
 
   for (const item of items) {
     try {
-      const apiKey = process.env.API_SHARED_SECRET || '';
       const res = await fetch(`${SERVER_URL}/send-notifications`, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          ...(apiKey ? { 'x-api-key': apiKey } : {}),
-        },
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ title: item.title, tag: item.tag, isMourning: item.is_mourning_required }),
       });
       const data = await res.json();

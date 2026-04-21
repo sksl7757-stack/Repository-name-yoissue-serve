@@ -25,22 +25,6 @@ app.use(express.json({ limit: '256kb' }));
 // Railway 앞단 프록시 → req.ip가 실제 클라이언트 IP를 반영하도록 설정.
 app.set('trust proxy', 1);
 
-// ── 인증: 공유 비밀 키 (x-api-key 헤더) ───────────────────────────────────────
-// API_SHARED_SECRET 미설정 시 경고 후 통과 (로컬 개발/레거시 호환)
-
-const API_SECRET = process.env.API_SHARED_SECRET || '';
-if (!API_SECRET) {
-  console.warn('[auth] API_SHARED_SECRET 미설정 — 모든 요청 허용 (개발 모드)');
-} else {
-  console.log('[auth] x-api-key 검증 활성화');
-}
-
-app.use((req, res, next) => {
-  if (!API_SECRET) return next();
-  if (req.headers['x-api-key'] === API_SECRET) return next();
-  return res.status(401).json({ error: 'unauthorized' });
-});
-
 // ── 레이트리밋: IP별 슬라이딩 윈도우 (인-메모리, 단일 인스턴스 전제) ───────────
 // Railway는 단일 컨테이너라 로컬 Map으로 충분. 멀티 인스턴스 전환 시 Redis 필요.
 
@@ -73,8 +57,8 @@ setInterval(() => {
   }
 }, 10 * 60 * 1000).unref?.();
 
-// LLM 호출: 분당 60회 (/chat 버스트 + 통신사 NAT 다중 사용자 대비)
-const llmLimiter   = createLimiter(60, 60 * 1000);
+// LLM 호출: 분당 30회 (/chat 버스트 커버 + 어뷰즈 bound. 통신사 NAT 동시접속은 드물어 괜찮음)
+const llmLimiter   = createLimiter(30, 60 * 1000);
 // ComfyUI 이미지: 분당 5회 (매우 비쌈)
 const imageLimiter = createLimiter(5, 60 * 1000);
 // 토큰 등록: 분당 5회 (푸시 토큰 폴루션 방어 — 인스톨 당 1회성 작업)
