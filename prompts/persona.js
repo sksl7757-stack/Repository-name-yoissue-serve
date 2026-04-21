@@ -1,18 +1,32 @@
-// prompts/persona.js — persona 폴더 자동 스캔.
-// 기존 generator.js 의 최상단 side-effect 로드를 격리.
+// prompts/persona.js — persona 폴더 스캔 + characters.js 레지스트리 교차 검증.
+// 불일치(폴더만 있거나 레지스트리에만 있거나 charName 이 name 과 다르면) 즉시 throw → 부팅 실패.
 
 const fs   = require('fs');
 const path = require('path');
+const { CHARACTERS } = require('../characters');
 
 const personaDir = path.join(__dirname, '..', 'persona');
 const personaMap = {};
 
-fs.readdirSync(personaDir).forEach(folder => {
-  const promptPath = path.join(personaDir, folder, 'prompt.js');
-  if (!fs.existsSync(promptPath)) return;
-  const persona = require(promptPath);
-  if (persona.charName) personaMap[persona.charName] = persona;
-});
+const foundFolders = fs.readdirSync(personaDir).filter(f =>
+  fs.existsSync(path.join(personaDir, f, 'prompt.js'))
+);
+
+for (const { id, name } of CHARACTERS) {
+  if (!foundFolders.includes(id)) {
+    throw new Error(`[persona] 레지스트리에 '${id}' 있지만 persona/${id}/prompt.js 누락`);
+  }
+  const persona = require(path.join(personaDir, id, 'prompt.js'));
+  if (persona.charName !== name) {
+    throw new Error(`[persona] persona/${id}/prompt.js 의 charName='${persona.charName}' ≠ 레지스트리 name='${name}'`);
+  }
+  personaMap[name] = persona;
+}
+
+const orphan = foundFolders.filter(f => !CHARACTERS.some(c => c.id === f));
+if (orphan.length) {
+  throw new Error(`[persona] persona 폴더 ${orphan.join(', ')} 가 characters.js 에 등록되지 않음`);
+}
 
 function getPersona(character) {
   return personaMap[character] || null;
