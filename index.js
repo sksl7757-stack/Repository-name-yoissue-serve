@@ -17,6 +17,13 @@ const { buildComfyWorkflow } = require('./comfyUtils');
 const { interpretNews }    = require('./newsInterpreter');
 const { buildImagePrompt } = require('./promptBuilder');
 const { todayKST }         = require('./dateUtil');
+const {
+  charNameToKey,
+  ensureUser,
+  ensureConversation,
+  insertMessage,
+  persistAssistantTurn,
+} = require('./services/persist');
 
 const app = express();
 app.use(cors());
@@ -260,11 +267,23 @@ async function decideResponders(messages, primaryChar, secondaryChar, emotionCon
 
 // /chat-init — 앱 시작 시 첫 코멘트용 (일반 JSON 응답)
 app.post('/chat-init', llmLimiter, async (req, res) => {
-  const { character, messages: rawMessages, memory, characterEmotion, secondaryChar, secondaryEmotion, isMourning = false } = req.body;
+  const { user_id, character, messages: rawMessages, memory, characterEmotion, secondaryChar, secondaryEmotion, isMourning = false } = req.body;
   const messages = sanitizeMessages(rawMessages);
+
+  // 영구 저장 준비 — user_id 없으면 전 과정 스킵(후방 호환).
+  // /chat-init 의 messages 는 뉴스 컨텍스트(합성 user msg)라 저장하지 않음. assistant turn 만 저장.
+  const conversationPromise = user_id
+    ? (async () => {
+        await ensureUser(user_id);
+        return ensureConversation(user_id, charNameToKey(character));
+      })()
+    : Promise.resolve(null);
+
   try {
     const primaryRaw      = await generateReply({ character, messages, memory, phase: 'INIT', characterEmotion, isMourning });
     const primaryValidated = validate({ reply: primaryRaw.text, phase: 'INIT', character, isMourning });
+
+    persistAssistantTurn(conversationPromise, character, primaryValidated.message);
 
     // 추모 모드: primary 1명만 반환, 질문 스킵
     if (isMourning) {
@@ -281,6 +300,11 @@ app.post('/chat-init', llmLimiter, async (req, res) => {
     const secEmotion = secondaryEmotion || (primaryRaw.emotion === 'positive' ? 'negative' : 'positive');
     const secondaryRaw      = await generateReply({ character: secChar, messages, memory, phase: 'INIT', primaryCharName: character, primaryComment: primaryValidated.message, primaryEmotion: primaryRaw.emotion, characterEmotion: secEmotion });
     const secondaryValidated = validate({ reply: secondaryRaw.text, phase: 'CHAT', character: secChar });
+
+    persistAssistantTurn(conversationPromise, secChar, secondaryValidated.message);
+    if (primaryValidated.question) {
+      persistAssistantTurn(conversationPromise, character, primaryValidated.question);
+    }
 
     res.json({
       turns: [
@@ -302,8 +326,30 @@ app.post('/chat', llmLimiter, async (req, res) => {
 
   const sse = (event, data) => res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
 
-  const { type, messages: rawMessages, character, memory, perspectiveStep = 0, characterEmotion = null, secondaryEmotion = null, secondaryChar: reqSecondaryChar = null, choiceDone = false, turnCount = 0, isMourning = false } = req.body;
+  const { user_id, type, messages: rawMessages, character, memory, perspectiveStep = 0, characterEmotion = null, secondaryEmotion = null, secondaryChar: reqSecondaryChar = null, choiceDone = false, turnCount = 0, isMourning = false } = req.body;
   const messages = sanitizeMessages(rawMessages);
+
+  // 영구 저장 준비 — user_id 없으면 스킵(후방 호환). 유저 마지막 발화를 즉시 기록해
+  // 강제종료 시에도 원문 보존. conversation 생성은 비동기로 선행, 이후 assistant turn 에 재사용.
+  const conversationPromise = user_id
+    ? (async () => {
+        await ensureUser(user_id);
+        return ensureConversation(user_id, charNameToKey(character));
+      })()
+    : Promise.resolve(null);
+  if (user_id) {
+    const lastUser = [...messages].reverse().find(m => m.role === 'user');
+    if (lastUser) {
+      (async () => {
+        try {
+          const conversationId = await conversationPromise;
+          if (conversationId) await insertMessage({ conversationId, role: 'user', charKey: null, content: lastUser.content });
+        } catch (e) {
+          console.error('[persist] /chat user msg 실패:', e.message);
+        }
+      })();
+    }
+  }
 
   // 클라이언트가 보낸 대화 상태 → 서버가 신뢰할 수 있는 instruction으로 변환
   const instructions = [];
@@ -332,6 +378,8 @@ app.post('/chat', llmLimiter, async (req, res) => {
       const rawReply       = await generateReply({ character, messages, memory, perspectiveStep, isPerspectiveRequest: true, characterEmotion });
       const validatedReply = validate({ reply: rawReply.text, phase: 'CHAT', character });
       sse('turn_end', { character, message: validatedReply.message, emotion: rawReply.emotion });
+      persistAssistantTurn(conversationPromise, character, validatedReply.message);
+      if (validatedReply.question) persistAssistantTurn(conversationPromise, character, validatedReply.question);
       sse('question',  { question: validatedReply.question || null });
       sse('done',      { end: false });
       res.end();
@@ -375,6 +423,7 @@ app.post('/chat', llmLimiter, async (req, res) => {
     const OFF_TOPIC_PATTERNS = ['오늘 뉴스 얘기', '오늘 주제 아님', '그건 내가 답하기', '뉴스 관련 얘기만', '다른 얘기는'];
     const firstOffTopic = OFF_TOPIC_PATTERNS.some(p => firstValidated.message?.includes(p));
     sse('turn_end', { character: first, message: firstValidated.message, emotion: firstEmotion || 'neutral', offTopic: firstOffTopic });
+    persistAssistantTurn(conversationPromise, first, firstValidated.message);
 
     // 두 번째 캐릭터 스트리밍
     if (second) {
@@ -394,12 +443,14 @@ app.post('/chat', llmLimiter, async (req, res) => {
       const secondValidated = validate({ reply: secondText, phase, character: second });
       console.log('second reply:', secondValidated.message?.slice(0, 80));
       sse('turn_end', { character: second, message: secondValidated.message, emotion: secondEmotion || 'neutral' });
+      persistAssistantTurn(conversationPromise, second, secondValidated.message);
     }
 
     const updatedState = updateState({ phase, questionAsked }, { questionAsked: !!firstValidated.question });
     console.log('state:', updatedState);
 
     sse('question', { question: firstValidated.question || null });
+    if (firstValidated.question) persistAssistantTurn(conversationPromise, first, firstValidated.question);
     sse('done',     { end: false });
     res.end();
 
