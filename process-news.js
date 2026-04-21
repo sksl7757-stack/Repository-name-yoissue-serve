@@ -557,51 +557,64 @@ async function main() {
     is_mourning_required,
   };
 
-  // 원자적 저장: 둘 다 성공해야 markAllProcessed 실행 (부분 실패 시 raw 미처리 유지 → 다음 cron 재시도).
-  // Supabase REST는 다중 테이블 트랜잭션 미지원 — news_processed 선저장 후 daily_news 실패 시 보상 롤백.
+  // 원자적 저장 + 재시도: 둘 다 성공해야 markAllProcessed 실행.
+  // Supabase REST는 다중 테이블 트랜잭션 미지원 → news_processed 선저장 후 daily_news 실패 시 보상 롤백.
+  // 일시적 네트워크/5xx 실패를 흡수하기 위해 30초 백오프로 최대 3회 시도 (초기 1 + 재시도 2).
+  const MAX_ATTEMPTS = 3;
+  const BACKOFF_MS = 30_000;
 
-  // 재실행 감지: raw가 여전히 미처리인데 오늘 news_processed 행이 있다 = 이전 실패 잔재 (프로세스 킬 등).
-  // 이 블록 도달 시점에 raw.processed=false 이므로 오늘 news_processed 행은 고아 확정 → 정리.
-  const { data: stale } = await supabase
-    .from('news_processed')
-    .select('id')
-    .eq('date', today);
-  if (stale && stale.length > 0) {
-    console.warn(`  [재실행 감지] 이전 실패 잔재 news_processed ${stale.length}건 정리`);
-    await supabase.from('news_processed').delete().eq('date', today);
-  }
-
-  const { data: inserted, error: insertErr } = await supabase
-    .from('news_processed')
-    .insert(record)
-    .select('id')
-    .single();
-
-  if (insertErr) {
-    throw new Error('news_processed 저장 실패 — abort: ' + insertErr.message);
-  }
-  console.log(`  news_processed 저장 완료 (id=${inserted.id})`);
-
-  const { error: dailyErr } = await supabase
-    .from('daily_news')
-    .upsert(record, { onConflict: 'date' });
-
-  if (dailyErr) {
-    console.error('  ❌ daily_news 저장 실패 — news_processed 롤백 시도:', dailyErr.message);
-    const { error: rollbackErr } = await supabase
+  async function saveAttempt() {
+    // 재실행 감지: raw 미처리 상태에서 오늘 news_processed 행이 있으면 고아 확정 → 정리.
+    const { data: stale } = await supabase
       .from('news_processed')
-      .delete()
-      .eq('id', inserted.id);
-    if (rollbackErr) {
-      console.error(`  ⚠⚠ 롤백 실패 — 수동 정리 필요 news_processed.id=${inserted.id}:`, rollbackErr.message);
-    } else {
-      console.log('  news_processed 롤백 완료');
+      .select('id')
+      .eq('date', today);
+    if (stale && stale.length > 0) {
+      console.warn(`  [재실행 감지] 이전 실패 잔재 news_processed ${stale.length}건 정리`);
+      await supabase.from('news_processed').delete().eq('date', today);
     }
-    throw new Error('daily_news 저장 실패: ' + dailyErr.message);
-  }
-  console.log('  daily_news 저장 완료');
 
-  // 둘 다 성공 — news_raw 처리 표시
+    const { data: inserted, error: insertErr } = await supabase
+      .from('news_processed')
+      .insert(record)
+      .select('id')
+      .single();
+    if (insertErr) throw new Error('news_processed 저장 실패: ' + insertErr.message);
+
+    const { error: dailyErr } = await supabase
+      .from('daily_news')
+      .upsert(record, { onConflict: 'date' });
+    if (dailyErr) {
+      console.error('  ❌ daily_news 저장 실패 — news_processed 롤백 시도:', dailyErr.message);
+      const { error: rollbackErr } = await supabase
+        .from('news_processed')
+        .delete()
+        .eq('id', inserted.id);
+      if (rollbackErr) {
+        console.error(`  ⚠⚠ 롤백 실패 — 다음 시도의 stale 정리가 처리 news_processed.id=${inserted.id}:`, rollbackErr.message);
+      }
+      throw new Error('daily_news 저장 실패: ' + dailyErr.message);
+    }
+    return inserted.id;
+  }
+
+  let savedId;
+  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+    try {
+      savedId = await saveAttempt();
+      console.log(`  ✅ 저장 완료 (attempt ${attempt}/${MAX_ATTEMPTS}, news_processed.id=${savedId})`);
+      break;
+    } catch (e) {
+      console.warn(`  ⚠ 저장 실패 (attempt ${attempt}/${MAX_ATTEMPTS}): ${e.message}`);
+      if (attempt === MAX_ATTEMPTS) {
+        throw new Error(`저장 ${MAX_ATTEMPTS}회 모두 실패 — markAllProcessed 스킵, 다음 cron 재시도: ${e.message}`);
+      }
+      console.log(`  ${BACKOFF_MS / 1000}초 대기 후 재시도...`);
+      await new Promise(r => setTimeout(r, BACKOFF_MS));
+    }
+  }
+
+  // 저장 성공 — news_raw 처리 표시
   await markAllProcessed(rawRows);
 
   console.log(`✅ [Stage 2] 완료: ${Date.now() - start}ms`);
