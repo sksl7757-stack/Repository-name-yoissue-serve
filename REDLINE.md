@@ -87,8 +87,10 @@
 2. `process-news.js` → `updateFinalSelection(date, title)`:
    final_title 컬럼만 update.
 3. 유저 조회/편집은 Express 엔드포인트로:
-   - `GET /redline-log/:date/view` — 브라우저 뷰어 (HTML + marked.js 렌더, 토큰 인증).
-   - `GET /redline-log/:date` — JSON ({ auto_log, user_notes, final_title, markdown }).
+   - `GET /redline-logs` — 목록 페이지 (날짜별 수집/차단/통과 집계, 클릭 시 해당 날짜 뷰어로 이동).
+   - `GET /redline-logs/list` — 목록 JSON ({ logs: [{ date, final_title, collectedCount, blockedCount, passedCount }] }).
+   - `GET /redline-log/:date/view` — 브라우저 뷰어 (HTML + marked.js 렌더, 토큰 인증). 상단에 이전/다음 날짜 네비.
+   - `GET /redline-log/:date` — JSON ({ auto_log, user_notes, final_title, markdown, prev, next }).
    - `PATCH /redline-log/:date { user_notes }` — 유저 메모 저장.
    - `GET /redline-log/:date/download` — `redline-YYYY-MM-DD.md` 다운로드 (옵시디언 호환).
 

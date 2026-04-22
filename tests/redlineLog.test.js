@@ -1,6 +1,7 @@
 const {
   buildAutoLog,
   mergeLog,
+  parseCounts,
   FINAL_TITLE_PLACEHOLDER,
   FINAL_TITLE_MARKER,
 } = require('../redlineLog');
@@ -132,5 +133,33 @@ describe('mergeLog', () => {
   test('user_notes 공백만 → 구분선 없이 auto_log 만', () => {
     const merged = mergeLog({ auto_log: 'body', user_notes: '   ', final_title: null });
     expect(merged).toBe('body');
+  });
+});
+
+describe('parseCounts', () => {
+  test('buildAutoLog 출력에서 수집/차단/통과 정상 추출', () => {
+    const md = buildAutoLog({
+      date: '2026-04-22',
+      collectedCount: 45,
+      blocked: [
+        { category: 'politicians',    title: 't1', matched: '이재명', url: 'https://a/1' },
+        { category: 'armed_conflict', title: 't2', matched: '가자 전쟁', url: 'https://a/2' },
+      ],
+      passed: [{ title: 'p', url: 'https://p/1' }],
+    });
+    expect(parseCounts(md)).toEqual({ collectedCount: 45, blockedCount: 2, passedCount: 1 });
+  });
+
+  test('빈/null 입력 → 0', () => {
+    expect(parseCounts('')).toEqual({ collectedCount: 0, blockedCount: 0, passedCount: 0 });
+    expect(parseCounts(null)).toEqual({ collectedCount: 0, blockedCount: 0, passedCount: 0 });
+  });
+
+  test('포맷 어긋남 → 매치 실패한 필드는 0', () => {
+    expect(parseCounts('- 수집: 10건\n딴 거\n- 통과: 3건')).toEqual({
+      collectedCount: 10,
+      blockedCount:   0,
+      passedCount:    3,
+    });
   });
 });

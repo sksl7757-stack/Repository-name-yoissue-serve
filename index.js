@@ -811,6 +811,8 @@ const {
   getLog: getRedlineLog,
   mergeLog: mergeRedlineLog,
   saveUserNotes: saveRedlineUserNotes,
+  listLogs: listRedlineLogs,
+  getAdjacentDates: getRedlineAdjacent,
   DEFAULT_USER_NOTES: REDLINE_DEFAULT_USER_NOTES,
 } = require('./redlineLog');
 
@@ -832,6 +834,21 @@ function requireRedlineToken(req, res, next) {
 
 // HTML 페이지는 인증 UI 자체가 먼저 뜨도록 토큰 검사 없이 서빙.
 // 실제 데이터(GET /redline-log/:date) 는 토큰 없으면 401 반환.
+app.get('/redline-logs', (req, res) => {
+  res.setHeader('Content-Type', 'text/html; charset=utf-8');
+  res.send(renderRedlineListHtml());
+});
+
+app.get('/redline-logs/list', requireRedlineToken, async (req, res) => {
+  try {
+    const logs = await listRedlineLogs();
+    res.json({ logs });
+  } catch (e) {
+    console.error('[redline-logs list]', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
 app.get('/redline-log/:date/view', (req, res) => {
   const date = req.params.date;
   if (!DATE_RE.test(date)) return res.status(400).send('invalid date');
@@ -843,8 +860,11 @@ app.get('/redline-log/:date', requireRedlineToken, async (req, res) => {
   const date = req.params.date;
   if (!DATE_RE.test(date)) return res.status(400).json({ error: 'invalid date' });
   try {
-    const row = await getRedlineLog(date);
-    if (!row) return res.status(404).json({ error: 'not_found', date });
+    const [row, adjacent] = await Promise.all([
+      getRedlineLog(date),
+      getRedlineAdjacent(date),
+    ]);
+    if (!row) return res.status(404).json({ error: 'not_found', date, prev: adjacent.prev, next: adjacent.next });
     const markdown = mergeRedlineLog(row);
     res.json({
       date: row.date,
@@ -853,6 +873,8 @@ app.get('/redline-log/:date', requireRedlineToken, async (req, res) => {
       auto_log:    row.auto_log,
       markdown,
       updated_at:  row.updated_at,
+      prev: adjacent.prev,
+      next: adjacent.next,
     });
   } catch (e) {
     console.error('[redline-log GET]', e.message);
@@ -932,11 +954,19 @@ function renderRedlineViewerHtml(date) {
   .status.error { color:var(--warn); }
   .empty { text-align:center; color:var(--muted); padding:60px 20px; }
   .toolbar { display:flex; gap:8px; margin-bottom:12px; align-items:center; flex-wrap:wrap; }
+  .ghost-link { color:var(--fg); text-decoration:none; border:1px solid var(--border); padding:6px 12px; border-radius:6px; font-size:14px; }
+  .ghost-link:hover { background:var(--card); }
+  .date-nav { max-width:900px; margin:20px auto 0; padding:0 20px; display:flex; justify-content:space-between; align-items:center; gap:12px; }
+  .date-nav .nav-btn { color:var(--accent); text-decoration:none; padding:8px 14px; border:1px solid var(--border); border-radius:6px; font-size:14px; background:var(--card); }
+  .date-nav .nav-btn:hover { background:var(--accent); color:#fff; }
+  .date-nav .nav-btn.disabled { color:var(--muted); pointer-events:none; opacity:0.4; }
+  .date-nav .current-date { color:var(--muted); font-size:14px; }
 </style>
 </head>
 <body>
 <header>
   <h1>🚫 레드라인 로그</h1>
+  <a href="/redline-logs" class="ghost-link">📋 목록</a>
   <input type="date" id="date-input" value="${date}" />
   <button id="go-btn" class="ghost">이동</button>
   <div class="spacer"></div>
@@ -944,6 +974,11 @@ function renderRedlineViewerHtml(date) {
   <button id="save-token-btn" class="ghost">토큰 저장</button>
   <button id="download-btn">📥 .md 다운로드</button>
 </header>
+<nav id="date-nav" class="date-nav" style="display:none">
+  <a href="#" id="prev-link" class="nav-btn">← 이전</a>
+  <span class="current-date" id="current-date">${date}</span>
+  <a href="#" id="next-link" class="nav-btn">다음 →</a>
+</nav>
 <main>
   <div id="content">
     <div class="empty">로딩 중...</div>
@@ -994,14 +1029,42 @@ function renderRedlineViewerHtml(date) {
         return;
       }
       if (res.status === 404) {
+        const data404 = await res.json().catch(() => ({}));
+        setupNav(data404.prev, data404.next);
         content.innerHTML = '<div class="card empty">이 날짜의 로그 없음. Stage 1 (select-news) 이 아직 실행되지 않았거나 실패했을 수 있음.</div>';
         return;
       }
       if (!res.ok) throw new Error('HTTP ' + res.status);
       const data = await res.json();
+      setupNav(data.prev, data.next);
       render(data);
     } catch (e) {
       content.innerHTML = '<div class="card"><h2>❌ 로드 실패</h2><pre>' + e.message + '</pre></div>';
+    }
+  }
+
+  function setupNav(prev, next) {
+    const nav = document.getElementById('date-nav');
+    const prevLink = document.getElementById('prev-link');
+    const nextLink = document.getElementById('next-link');
+    nav.style.display = 'flex';
+    if (prev) {
+      prevLink.href = '/redline-log/' + prev + '/view';
+      prevLink.textContent = '← ' + prev;
+      prevLink.classList.remove('disabled');
+    } else {
+      prevLink.href = '#';
+      prevLink.textContent = '← 이전 없음';
+      prevLink.classList.add('disabled');
+    }
+    if (next) {
+      nextLink.href = '/redline-log/' + next + '/view';
+      nextLink.textContent = next + ' →';
+      nextLink.classList.remove('disabled');
+    } else {
+      nextLink.href = '#';
+      nextLink.textContent = '다음 없음 →';
+      nextLink.classList.add('disabled');
     }
   }
 
@@ -1079,6 +1142,135 @@ function renderRedlineViewerHtml(date) {
     window.addEventListener('beforeunload', (e) => {
       if (dirty) { e.preventDefault(); e.returnValue = ''; }
     });
+  }
+
+  load();
+})();
+</script>
+</body>
+</html>`;
+}
+function renderRedlineListHtml() {
+  return `<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>레드라인 로그 목록</title>
+<style>
+  :root { --bg:#0f1419; --fg:#e6e6e6; --muted:#8a94a6; --card:#171c24; --border:#2a313c; --accent:#7c5cbf; --warn:#e05555; }
+  * { box-sizing: border-box; }
+  body { margin:0; padding:0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans KR', system-ui, sans-serif; background:var(--bg); color:var(--fg); line-height:1.6; }
+  header { position:sticky; top:0; background:rgba(15,20,25,0.95); border-bottom:1px solid var(--border); padding:12px 20px; backdrop-filter:blur(8px); z-index:10; display:flex; gap:12px; align-items:center; flex-wrap:wrap; }
+  header h1 { font-size:18px; margin:0; color:var(--accent); }
+  header .spacer { flex:1; }
+  header input[type="password"] { background:var(--card); border:1px solid var(--border); color:var(--fg); padding:6px 10px; border-radius:6px; font-size:14px; }
+  header button { background:var(--accent); color:#fff; border:none; padding:7px 14px; border-radius:6px; font-size:14px; cursor:pointer; }
+  header button.ghost { background:transparent; border:1px solid var(--border); color:var(--fg); }
+  main { max-width:900px; margin:0 auto; padding:24px 20px 80px; }
+  .card { background:var(--card); border:1px solid var(--border); border-radius:10px; padding:20px; }
+  .log-item { display:flex; align-items:center; gap:12px; padding:14px 16px; border-radius:8px; color:inherit; text-decoration:none; border:1px solid transparent; transition:all 0.15s; }
+  .log-item:hover { background:rgba(124,92,191,0.08); border-color:var(--border); }
+  .log-item + .log-item { border-top:1px solid var(--border); border-radius:0 0 8px 8px; }
+  .log-item:first-child { border-radius:8px 8px 0 0; }
+  .log-icon { font-size:18px; }
+  .log-date { font-weight:600; color:var(--accent); min-width:120px; }
+  .log-today { background:var(--accent); color:#fff; padding:2px 8px; border-radius:10px; font-size:11px; margin-left:6px; vertical-align:middle; }
+  .log-counts { color:var(--muted); font-size:14px; margin-left:auto; display:flex; gap:16px; }
+  .log-counts .val { color:var(--fg); font-weight:600; }
+  .log-final { color:var(--muted); font-size:13px; margin-left:12px; max-width:260px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .empty { text-align:center; color:var(--muted); padding:60px 20px; }
+  @media (max-width: 720px) {
+    .log-item { flex-wrap:wrap; }
+    .log-counts { width:100%; margin-left:0; margin-top:4px; font-size:13px; }
+    .log-final { display:none; }
+  }
+</style>
+</head>
+<body>
+<header>
+  <h1>📋 레드라인 로그 목록</h1>
+  <div class="spacer"></div>
+  <input type="password" id="token-input" placeholder="토큰" />
+  <button id="save-token-btn" class="ghost">토큰 저장</button>
+</header>
+<main>
+  <div id="content">
+    <div class="empty">로딩 중...</div>
+  </div>
+</main>
+<script>
+(function(){
+  const TOKEN_KEY = 'redline_log_token';
+  const tokenIn = document.getElementById('token-input');
+  const saveTokenBtn = document.getElementById('save-token-btn');
+  const content = document.getElementById('content');
+
+  function token() { return localStorage.getItem(TOKEN_KEY) || ''; }
+  tokenIn.value = token();
+
+  saveTokenBtn.addEventListener('click', () => {
+    localStorage.setItem(TOKEN_KEY, tokenIn.value.trim());
+    load();
+  });
+
+  function authHeaders() {
+    const t = token();
+    return t ? { Authorization: 'Bearer ' + t } : {};
+  }
+
+  function todayKST() {
+    const now = new Date();
+    const utc = now.getTime() + now.getTimezoneOffset() * 60000;
+    const kst = new Date(utc + 9 * 3600000);
+    return kst.toISOString().slice(0, 10);
+  }
+
+  function escapeHtml(s) {
+    return (s || '').replace(/[&<>"']/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
+  }
+
+  async function load() {
+    content.innerHTML = '<div class="empty">로딩 중...</div>';
+    try {
+      const res = await fetch('/redline-logs/list', { headers: authHeaders() });
+      if (res.status === 401) {
+        content.innerHTML = '<div class="card"><h2>🔒 인증 필요</h2><p>상단에 토큰 입력 후 "토큰 저장" 을 눌러주세요.</p></div>';
+        return;
+      }
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      const data = await res.json();
+      render(data.logs || []);
+    } catch (e) {
+      content.innerHTML = '<div class="card"><h2>❌ 로드 실패</h2><pre>' + escapeHtml(e.message) + '</pre></div>';
+    }
+  }
+
+  function render(logs) {
+    if (logs.length === 0) {
+      content.innerHTML = '<div class="card empty">로그 없음. Stage 1 cron 이 한 번 이상 돌아야 생성됨.</div>';
+      return;
+    }
+    const today = todayKST();
+    const rows = logs.map(l => {
+      const isToday = l.date === today;
+      const finalHtml = l.final_title
+        ? '<span class="log-final">' + escapeHtml(l.final_title) + '</span>'
+        : '';
+      return [
+        '<a class="log-item" href="/redline-log/' + l.date + '/view">',
+        '  <span class="log-icon">📄</span>',
+        '  <span class="log-date">' + l.date + (isToday ? '<span class="log-today">오늘</span>' : '') + '</span>',
+        finalHtml,
+        '  <span class="log-counts">',
+        '    <span>수집 <span class="val">' + l.collectedCount + '</span></span>',
+        '    <span>차단 <span class="val">' + l.blockedCount + '</span></span>',
+        '    <span>통과 <span class="val">' + l.passedCount + '</span></span>',
+        '  </span>',
+        '</a>',
+      ].join('');
+    }).join('');
+    content.innerHTML = '<div class="card" style="padding:0">' + rows + '</div>';
   }
 
   load();

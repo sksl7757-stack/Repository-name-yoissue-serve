@@ -121,6 +121,20 @@ function buildAutoLog({ date, collectedCount, blocked, passed }) {
   return lines.join('\n');
 }
 
+// auto_log 본문에서 요약 수치 추출 — 목록 페이지 집계용.
+// buildAutoLog 가 생성하는 고정 포맷("- 수집: N건" 등) 에 의존.
+function parseCounts(autoLog) {
+  const pick = (re) => {
+    const m = (autoLog || '').match(re);
+    return m ? parseInt(m[1], 10) : 0;
+  };
+  return {
+    collectedCount: pick(/^- 수집:\s*(\d+)건/m),
+    blockedCount:   pick(/^- 차단:\s*(\d+)건/m),
+    passedCount:    pick(/^- 통과:\s*(\d+)건/m),
+  };
+}
+
 // auto_log + final_title + user_notes 를 하나의 마크다운으로 합침.
 // API `/redline-log/:date` 와 다운로드에서 재사용.
 function mergeLog({ auto_log, user_notes, final_title }) {
@@ -188,6 +202,35 @@ async function getLog(date) {
   return data;
 }
 
+// 목록 페이지용 — 전체 row 를 date 역순으로. auto_log 는 건수 추출 후 버린다.
+async function listLogs() {
+  const { data, error } = await supabase
+    .from('redline_logs')
+    .select('date, auto_log, final_title, updated_at')
+    .order('date', { ascending: false });
+  if (error) throw new Error(`redline_logs 목록 조회 실패: ${error.message}`);
+  return (data || []).map(row => ({
+    date:        row.date,
+    final_title: row.final_title,
+    updated_at:  row.updated_at,
+    ...parseCounts(row.auto_log),
+  }));
+}
+
+// 뷰어 이전/다음 네비게이션 — date 기준 앞뒤 가장 가까운 날짜.
+async function getAdjacentDates(date) {
+  const [prevRes, nextRes] = await Promise.all([
+    supabase.from('redline_logs').select('date').lt('date', date).order('date', { ascending: false }).limit(1),
+    supabase.from('redline_logs').select('date').gt('date', date).order('date', { ascending: true  }).limit(1),
+  ]);
+  if (prevRes.error) throw new Error(`redline_logs prev 조회 실패: ${prevRes.error.message}`);
+  if (nextRes.error) throw new Error(`redline_logs next 조회 실패: ${nextRes.error.message}`);
+  return {
+    prev: prevRes.data && prevRes.data[0] ? prevRes.data[0].date : null,
+    next: nextRes.data && nextRes.data[0] ? nextRes.data[0].date : null,
+  };
+}
+
 async function saveUserNotes(date, userNotes) {
   // 빈 문자열은 허용, null/undefined 은 '' 로 표준화.
   const normalized = typeof userNotes === 'string' ? userNotes : '';
@@ -202,10 +245,13 @@ async function saveUserNotes(date, userNotes) {
 module.exports = {
   buildAutoLog,
   mergeLog,
+  parseCounts,
   saveAutoLog,
   updateFinalSelection,
   getLog,
   saveUserNotes,
+  listLogs,
+  getAdjacentDates,
   DEFAULT_USER_NOTES,
   FINAL_TITLE_PLACEHOLDER,
   FINAL_TITLE_MARKER,
