@@ -135,10 +135,41 @@ function parseCounts(autoLog) {
   };
 }
 
+// 플레이스홀더(게이트 거부·미선정 등) 판별 — '_(...)_' 로 시작하면 진짜 선정이 아님.
+function isPlaceholderTitle(t) {
+  return !t || t.startsWith('_(');
+}
+
 // auto_log + final_title + user_notes 를 하나의 마크다운으로 합침.
 // API `/redline-log/:date` 와 다운로드에서 재사용.
+//
+// final_title 이 실제 선정값일 때 2가지 가공 추가:
+//   1) 제목 바로 아래에 "📰 오늘 최종 선정" 스포트라이트 섹션 삽입 (## 요약 앞).
+//   2) "## ✅ 통과" 목록에서 해당 제목 라인에 ⭐ 표시.
 function mergeLog({ auto_log, user_notes, final_title }) {
-  const body  = (auto_log || '').split(FINAL_TITLE_MARKER).join(final_title || FINAL_TITLE_PLACEHOLDER);
+  let body = (auto_log || '').split(FINAL_TITLE_MARKER).join(final_title || FINAL_TITLE_PLACEHOLDER);
+
+  if (!isPlaceholderTitle(final_title)) {
+    // (1) 스포트라이트 섹션 — "## 요약" 직전에 삽입.
+    const spotlight = [
+      '## 📰 오늘 최종 선정',
+      '',
+      `### ${final_title}`,
+      '',
+      '---',
+      '',
+      '',
+    ].join('\n');
+    const summaryIdx = body.indexOf('## 요약');
+    if (summaryIdx !== -1) {
+      body = body.slice(0, summaryIdx) + spotlight + body.slice(summaryIdx);
+    }
+    // (2) 통과 목록 마킹 — 첫 occurrence 만 (dedupe 후라 안전).
+    const titleLine = `- **${final_title}**`;
+    const starLine  = `- ⭐ **${final_title}** _← 최종 선정_`;
+    body = body.replace(titleLine, starLine);
+  }
+
   const notes = (user_notes || '').trim();
   if (!notes) return body;
   const sep = body.endsWith('\n') ? '' : '\n';

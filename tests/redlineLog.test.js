@@ -106,16 +106,49 @@ describe('mergeLog', () => {
     '',
   ].join('\n');
 
-  test('final_title 없음 → 플레이스홀더 치환', () => {
+  test('final_title 없음 → 플레이스홀더 치환, 스포트라이트 섹션 없음', () => {
     const merged = mergeLog({ auto_log: sampleAuto, user_notes: '', final_title: null });
     expect(merged).toContain(`- 최종 선정: ${FINAL_TITLE_PLACEHOLDER}`);
     expect(merged).not.toContain(FINAL_TITLE_MARKER);
+    expect(merged).not.toContain('## 📰 오늘 최종 선정');
   });
 
-  test('final_title 있음 → 그 값으로 치환', () => {
+  test('final_title 있음 → 치환 + 스포트라이트 섹션이 요약 앞에 삽입', () => {
     const merged = mergeLog({ auto_log: sampleAuto, user_notes: '', final_title: '반도체 수출 증가' });
     expect(merged).toContain('- 최종 선정: 반도체 수출 증가');
     expect(merged).not.toContain(FINAL_TITLE_MARKER);
+    expect(merged).toContain('## 📰 오늘 최종 선정');
+    expect(merged).toContain('### 반도체 수출 증가');
+    expect(merged.indexOf('## 📰 오늘 최종 선정')).toBeLessThan(merged.indexOf('## 요약'));
+  });
+
+  test('final_title 이 통과 목록의 제목과 일치 → ⭐ 표시 삽입', () => {
+    const autoWithPassed = [
+      '## 요약',
+      `- 최종 선정: ${FINAL_TITLE_MARKER}`,
+      '',
+      '## ✅ 통과 (2건)',
+      '',
+      '- **반도체 수출 증가**',
+      '  - 출처: example.com',
+      '- **환율 안정세**',
+      '  - 출처: other.com',
+      '',
+    ].join('\n');
+    const merged = mergeLog({ auto_log: autoWithPassed, user_notes: '', final_title: '반도체 수출 증가' });
+    expect(merged).toContain('- ⭐ **반도체 수출 증가** _← 최종 선정_');
+    expect(merged).not.toContain('- **반도체 수출 증가**'); // 원본 라인은 치환됨
+    expect(merged).toContain('- **환율 안정세**'); // 다른 라인은 그대로
+  });
+
+  test('게이트 거부 플레이스홀더(_(...)_)는 스포트라이트 없음', () => {
+    const merged = mergeLog({
+      auto_log: sampleAuto,
+      user_notes: '',
+      final_title: '_(게이트 거부: thin_content)_',
+    });
+    expect(merged).toContain('_(게이트 거부: thin_content)_');
+    expect(merged).not.toContain('## 📰 오늘 최종 선정');
   });
 
   test('user_notes 있음 → 하단에 구분선과 함께 추가', () => {
