@@ -9,6 +9,7 @@ const { stripHtml }        = require('./stripHtml');
 const { todayKST, mmddKST } = require('./dateUtil');
 const { classifyMourning } = require('./newsInterpreter');
 const { shouldPersistNews, MIN_CONTENT_LENGTH } = require('./newsGate');
+const { updateFinalSelection } = require('./redlineLog');
 
 loadEnv();
 
@@ -528,6 +529,11 @@ async function main() {
     console.warn(`  🚫 [Gate 거부] reason=${gate.reason} — daily_news 저장 스킵, 어제 row 유지`);
     console.warn(`     title=${(best.title || '').slice(0, 40)} url=${best.url || '(null)'} len=${(best.content || '').length} isFallback=${best.isFallback || false}`);
     await markAllProcessed(rawRows);
+    try {
+      await updateFinalSelection(today, `_(게이트 거부: ${gate.reason})_`);
+    } catch (e) {
+      console.warn('  ⚠️ [Redline 로그] 게이트 거부 기록 실패:', e.message);
+    }
     console.log(`✅ [Stage 2] 완료 (게이트 거부): ${Date.now() - start}ms`);
     return;
   }
@@ -629,6 +635,14 @@ async function main() {
 
   // 저장 성공 — news_raw 처리 표시
   await markAllProcessed(rawRows);
+
+  // redline_logs.final_title 갱신. 실패해도 Stage 2 성공 상태 유지.
+  try {
+    const ok = await updateFinalSelection(today, best.title);
+    if (ok) console.log(`  📝 [Redline 로그] final_title 갱신: ${best.title}`);
+  } catch (e) {
+    console.warn(`  ⚠️ [Redline 로그] final_title 갱신 실패:`, e.message);
+  }
 
   console.log(`✅ [Stage 2] 완료: ${Date.now() - start}ms`);
 }

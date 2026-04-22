@@ -7,6 +7,7 @@ const { supabase }       = require('./supabase');
 const { stripHtml }      = require('./stripHtml');
 const { todayKST }       = require('./dateUtil');
 const { isRedlineTitle } = require('./redline');
+const { saveAutoLog }    = require('./redlineLog');
 
 loadEnv();
 
@@ -193,9 +194,12 @@ async function main() {
   const today = todayKST();
 
   // 1. 키워드별 버킷 수집 + 필터 동시 적용
-  const queryBuckets = {};
-  const overflowPool = [];
-  const redlineStats = { total: 0, byReason: {} };
+  const queryBuckets      = {};
+  const overflowPool      = [];
+  const redlineStats      = { total: 0, byReason: {} };
+  const redlineBlockedLog = []; // [{ category, title, matched, url }]
+  const redlinePassedLog  = []; // [{ title, url }]
+  let   redlineInputCount = 0;  // 사전 필터 통과 후 redline 에 진입한 건수
 
   for (const query in QUERY_CONFIG) {
     const maxPerQuery = QUERY_CONFIG[query];
@@ -213,13 +217,22 @@ async function main() {
         if (isOpinion(title)) continue;
         if (isWeakNews(title)) continue;
 
+        redlineInputCount++;
         const redline = isRedlineTitle(title);
         if (redline.blocked) {
           redlineStats.total++;
           redlineStats.byReason[redline.reason] = (redlineStats.byReason[redline.reason] || 0) + 1;
+          redlineBlockedLog.push({
+            category: redline.reason.replace(/^redline_/, ''),
+            title,
+            matched: redline.matched,
+            url: link,
+          });
           console.log(`  🚫 [Redline] ${redline.reason} title="${title}"`);
           continue;
         }
+
+        redlinePassedLog.push({ title, url: link });
 
         const item = { title, description, link };
         if (queryBuckets[query].length < maxPerQuery) {
@@ -241,6 +254,19 @@ async function main() {
     console.log(`  📊 [Redline 집계] 총 ${redlineStats.total}건 블록 / ${breakdown}`);
   } else {
     console.log(`  📊 [Redline 집계] 블록 없음`);
+  }
+
+  // Supabase redline_logs 에 auto_log 저장. 실패해도 Stage 1 진행에는 영향 없도록 try/catch.
+  // user_notes / final_title 컬럼은 건드리지 않음 — 유저 메모와 Stage 2 갱신 값 보존.
+  try {
+    const { length } = await saveAutoLog(today, {
+      collectedCount: redlineInputCount,
+      blocked:        redlineBlockedLog,
+      passed:         redlinePassedLog,
+    });
+    console.log(`  📝 [Redline 로그] Supabase 저장 완료 (auto_log ${length}자)`);
+  } catch (e) {
+    console.warn(`  ⚠️ [Redline 로그] 저장 실패:`, e.message);
   }
 
   // 2. 버킷 + overflow 전부 합친 뒤 impact 점수 순 top-30 (MIN_IMPACT 컷 없음 — GPT가 중요도 판단)

@@ -804,6 +804,291 @@ app.post('/start-image-generation', imageLimiter, async (req, res) => {
 });
 
 
+// ── Redline 로그 뷰어 (DB → 마크다운/HTML) ──────────────────────────────────
+// 인증: 환경변수 REDLINE_LOG_TOKEN 이 설정돼 있으면 Bearer / ?token= / localStorage
+// 셋 중 하나로 일치해야 통과. 설정 없으면 개방(로컬 dev 용).
+const {
+  getLog: getRedlineLog,
+  mergeLog: mergeRedlineLog,
+  saveUserNotes: saveRedlineUserNotes,
+  DEFAULT_USER_NOTES: REDLINE_DEFAULT_USER_NOTES,
+} = require('./redlineLog');
+
+const REDLINE_LOG_TOKEN = process.env.REDLINE_LOG_TOKEN || '';
+const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+
+function extractToken(req) {
+  const auth = req.headers.authorization || '';
+  if (auth.startsWith('Bearer ')) return auth.slice(7).trim();
+  if (typeof req.query.token === 'string') return req.query.token;
+  return '';
+}
+
+function requireRedlineToken(req, res, next) {
+  if (!REDLINE_LOG_TOKEN) return next();
+  if (extractToken(req) === REDLINE_LOG_TOKEN) return next();
+  res.status(401).json({ error: 'unauthorized' });
+}
+
+// HTML 페이지는 인증 UI 자체가 먼저 뜨도록 토큰 검사 없이 서빙.
+// 실제 데이터(GET /redline-log/:date) 는 토큰 없으면 401 반환.
+app.get('/redline-log/:date/view', (req, res) => {
+  const date = req.params.date;
+  if (!DATE_RE.test(date)) return res.status(400).send('invalid date');
+  res.setHeader('Content-Type', 'text/html; charset=utf-8');
+  res.send(renderRedlineViewerHtml(date));
+});
+
+app.get('/redline-log/:date', requireRedlineToken, async (req, res) => {
+  const date = req.params.date;
+  if (!DATE_RE.test(date)) return res.status(400).json({ error: 'invalid date' });
+  try {
+    const row = await getRedlineLog(date);
+    if (!row) return res.status(404).json({ error: 'not_found', date });
+    const markdown = mergeRedlineLog(row);
+    res.json({
+      date: row.date,
+      final_title: row.final_title,
+      user_notes:  row.user_notes,
+      auto_log:    row.auto_log,
+      markdown,
+      updated_at:  row.updated_at,
+    });
+  } catch (e) {
+    console.error('[redline-log GET]', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.patch('/redline-log/:date', requireRedlineToken, async (req, res) => {
+  const date = req.params.date;
+  if (!DATE_RE.test(date)) return res.status(400).json({ error: 'invalid date' });
+  const { user_notes } = req.body || {};
+  if (typeof user_notes !== 'string') {
+    return res.status(400).json({ error: 'user_notes must be string' });
+  }
+  try {
+    await saveRedlineUserNotes(date, user_notes);
+    res.json({ ok: true, date });
+  } catch (e) {
+    console.error('[redline-log PATCH]', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.get('/redline-log/:date/download', requireRedlineToken, async (req, res) => {
+  const date = req.params.date;
+  if (!DATE_RE.test(date)) return res.status(400).send('invalid date');
+  try {
+    const row = await getRedlineLog(date);
+    if (!row) return res.status(404).send('not found');
+    const markdown = mergeRedlineLog(row);
+    res.setHeader('Content-Type', 'text/markdown; charset=utf-8');
+    res.setHeader('Content-Disposition', `attachment; filename="redline-${date}.md"`);
+    res.send(markdown);
+  } catch (e) {
+    console.error('[redline-log download]', e.message);
+    res.status(500).send(e.message);
+  }
+});
+
+function renderRedlineViewerHtml(date) {
+  const defaultNotes = REDLINE_DEFAULT_USER_NOTES
+    .replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  return `<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>${date} · 레드라인 로그</title>
+<script src="https://cdn.jsdelivr.net/npm/marked@12.0.2/marked.min.js"></script>
+<style>
+  :root { --bg:#0f1419; --fg:#e6e6e6; --muted:#8a94a6; --card:#171c24; --border:#2a313c; --accent:#7c5cbf; --warn:#e05555; }
+  * { box-sizing: border-box; }
+  body { margin:0; padding:0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans KR', system-ui, sans-serif; background:var(--bg); color:var(--fg); line-height:1.6; }
+  header { position:sticky; top:0; background:rgba(15,20,25,0.95); border-bottom:1px solid var(--border); padding:12px 20px; backdrop-filter:blur(8px); z-index:10; display:flex; gap:12px; align-items:center; flex-wrap:wrap; }
+  header h1 { font-size:18px; margin:0; color:var(--accent); }
+  header .spacer { flex:1; }
+  header input[type="date"], header input[type="password"] { background:var(--card); border:1px solid var(--border); color:var(--fg); padding:6px 10px; border-radius:6px; font-size:14px; }
+  header button { background:var(--accent); color:#fff; border:none; padding:7px 14px; border-radius:6px; font-size:14px; cursor:pointer; }
+  header button:hover { opacity:0.9; }
+  header button.ghost { background:transparent; border:1px solid var(--border); color:var(--fg); }
+  main { max-width:900px; margin:0 auto; padding:24px 20px 80px; }
+  .card { background:var(--card); border:1px solid var(--border); border-radius:10px; padding:24px; margin-bottom:20px; }
+  .card h2 { margin-top:0; color:var(--accent); }
+  .rendered h1 { border-bottom:1px solid var(--border); padding-bottom:8px; }
+  .rendered h2 { color:var(--accent); margin-top:28px; }
+  .rendered h3 { color:#b7a6e0; margin-top:20px; }
+  .rendered a { color:#8fb4ff; }
+  .rendered code { background:#0a0d12; padding:2px 6px; border-radius:4px; font-size:0.9em; color:#f0a070; }
+  .rendered hr { border:none; border-top:1px solid var(--border); margin:24px 0; }
+  .rendered ul { padding-left:22px; }
+  .rendered li { margin:4px 0; }
+  .rendered input[type="checkbox"] { transform: translateY(2px); margin-right:6px; }
+  textarea { width:100%; min-height:200px; background:#0a0d12; color:var(--fg); border:1px solid var(--border); border-radius:6px; padding:12px; font-family: 'SF Mono', Consolas, monospace; font-size:13px; line-height:1.5; resize:vertical; }
+  .status { color:var(--muted); font-size:13px; margin-left:auto; }
+  .status.saving { color:#f0c040; }
+  .status.saved { color:#70d090; }
+  .status.error { color:var(--warn); }
+  .empty { text-align:center; color:var(--muted); padding:60px 20px; }
+  .toolbar { display:flex; gap:8px; margin-bottom:12px; align-items:center; flex-wrap:wrap; }
+</style>
+</head>
+<body>
+<header>
+  <h1>🚫 레드라인 로그</h1>
+  <input type="date" id="date-input" value="${date}" />
+  <button id="go-btn" class="ghost">이동</button>
+  <div class="spacer"></div>
+  <input type="password" id="token-input" placeholder="토큰" />
+  <button id="save-token-btn" class="ghost">토큰 저장</button>
+  <button id="download-btn">📥 .md 다운로드</button>
+</header>
+<main>
+  <div id="content">
+    <div class="empty">로딩 중...</div>
+  </div>
+</main>
+<script>
+(function(){
+  const DATE = ${JSON.stringify(date)};
+  const DEFAULT_NOTES = ${JSON.stringify(REDLINE_DEFAULT_USER_NOTES)};
+  const TOKEN_KEY = 'redline_log_token';
+  const input  = document.getElementById('date-input');
+  const goBtn  = document.getElementById('go-btn');
+  const tokenIn = document.getElementById('token-input');
+  const saveTokenBtn = document.getElementById('save-token-btn');
+  const dlBtn  = document.getElementById('download-btn');
+  const content = document.getElementById('content');
+
+  function token() { return localStorage.getItem(TOKEN_KEY) || ''; }
+  tokenIn.value = token();
+
+  saveTokenBtn.addEventListener('click', () => {
+    localStorage.setItem(TOKEN_KEY, tokenIn.value.trim());
+    load();
+  });
+
+  goBtn.addEventListener('click', () => {
+    const d = input.value;
+    if (d && d !== DATE) location.href = '/redline-log/' + d + '/view';
+  });
+
+  dlBtn.addEventListener('click', () => {
+    const t = token();
+    const url = '/redline-log/' + DATE + '/download' + (t ? '?token=' + encodeURIComponent(t) : '');
+    location.href = url;
+  });
+
+  function authHeaders() {
+    const t = token();
+    return t ? { Authorization: 'Bearer ' + t } : {};
+  }
+
+  async function load() {
+    content.innerHTML = '<div class="empty">로딩 중...</div>';
+    try {
+      const res = await fetch('/redline-log/' + DATE, { headers: authHeaders() });
+      if (res.status === 401) {
+        content.innerHTML = '<div class="card"><h2>🔒 인증 필요</h2><p>상단에 토큰 입력 후 "토큰 저장" 을 눌러주세요.</p></div>';
+        return;
+      }
+      if (res.status === 404) {
+        content.innerHTML = '<div class="card empty">이 날짜의 로그 없음. Stage 1 (select-news) 이 아직 실행되지 않았거나 실패했을 수 있음.</div>';
+        return;
+      }
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      const data = await res.json();
+      render(data);
+    } catch (e) {
+      content.innerHTML = '<div class="card"><h2>❌ 로드 실패</h2><pre>' + e.message + '</pre></div>';
+    }
+  }
+
+  function render(data) {
+    const merged = data.markdown || '';
+    const notes = data.user_notes || DEFAULT_NOTES;
+    marked.setOptions({ breaks: false, gfm: true });
+
+    content.innerHTML = [
+      '<div class="card">',
+      '  <div class="toolbar">',
+      '    <h2 style="margin:0">자동 생성 + 미리보기</h2>',
+      '  </div>',
+      '  <div class="rendered" id="rendered"></div>',
+      '</div>',
+      '<div class="card">',
+      '  <div class="toolbar">',
+      '    <h2 style="margin:0">✏️ 메모 편집</h2>',
+      '    <span class="status" id="save-status">저장됨</span>',
+      '    <button id="save-btn">💾 저장</button>',
+      '  </div>',
+      '  <textarea id="notes-editor" spellcheck="false"></textarea>',
+      '  <p style="color:var(--muted); font-size:12px; margin-top:10px">',
+      '    여기서 작성한 내용은 <code>user_notes</code> 컬럼에만 저장됨. 내일 cron 이 돌아도 보존됨. 자동저장은 편집 후 2초 뒤.',
+      '  </p>',
+      '</div>',
+    ].join('');
+
+    document.getElementById('rendered').innerHTML = marked.parse(merged);
+
+    const ta = document.getElementById('notes-editor');
+    const saveBtn = document.getElementById('save-btn');
+    const status = document.getElementById('save-status');
+    ta.value = notes;
+
+    let debounceId = null;
+    let dirty = false;
+
+    async function doSave() {
+      status.textContent = '저장 중...';
+      status.className = 'status saving';
+      try {
+        const res = await fetch('/redline-log/' + DATE, {
+          method: 'PATCH',
+          headers: Object.assign({ 'Content-Type': 'application/json' }, authHeaders()),
+          body: JSON.stringify({ user_notes: ta.value }),
+        });
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        status.textContent = '저장됨 · ' + new Date().toLocaleTimeString();
+        status.className = 'status saved';
+        dirty = false;
+        // 저장 후 미리보기 재렌더
+        const r2 = await fetch('/redline-log/' + DATE, { headers: authHeaders() });
+        if (r2.ok) {
+          const d2 = await r2.json();
+          document.getElementById('rendered').innerHTML = marked.parse(d2.markdown || '');
+        }
+      } catch (e) {
+        status.textContent = '저장 실패: ' + e.message;
+        status.className = 'status error';
+      }
+    }
+
+    ta.addEventListener('input', () => {
+      dirty = true;
+      status.textContent = '편집 중...';
+      status.className = 'status saving';
+      clearTimeout(debounceId);
+      debounceId = setTimeout(doSave, 2000);
+    });
+    saveBtn.addEventListener('click', () => {
+      clearTimeout(debounceId);
+      doSave();
+    });
+    window.addEventListener('beforeunload', (e) => {
+      if (dirty) { e.preventDefault(); e.returnValue = ''; }
+    });
+  }
+
+  load();
+})();
+</script>
+</body>
+</html>`;
+}
+// ─── Redline 로그 뷰어 끝 ────────────────────────────────────────────────────
+
 const cron = require('node-cron');
 const { main: selectNews }  = require('./select-news');
 const { main: processNews } = require('./process-news');

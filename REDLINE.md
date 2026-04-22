@@ -71,6 +71,40 @@
 - `select-news.js` 로그에 카테고리별 블록 집계 출력. 0건 일 때와 폭증할 때 모두 확인.
 - 블록 로그(`🚫 [Redline] ... title="..."`) 를 주기 검토하여 오탐·누락 패턴 발견 시 카테고리·키워드 조정.
 
+## 일일 로그 (유저 검토용) — Supabase `redline_logs`
+
+저장소는 Railway 파일시스템(ephemeral) 대신 Supabase `redline_logs` 테이블. 스키마는
+`supabase-migrations/002_redline_logs.sql` 참고.
+
+### 컬럼 분리
+- `auto_log`   — Stage 1 cron 이 매일 overwrite. 차단/통과 자동 집계.
+- `user_notes` — 유저만 편집 (판단·메모·조정 사항). cron 이 절대 건드리지 않음 → 메모 보존.
+- `final_title` — Stage 2 (`process-news`) 가 pickBestNews 저장 성공 직후 갱신.
+
+### 데이터 플로우
+1. `select-news.js` → `saveAutoLog(date, { collectedCount, blocked, passed })`:
+   신규 row 시 user_notes 기본 템플릿 삽입, 기존 row 시 auto_log 만 update.
+2. `process-news.js` → `updateFinalSelection(date, title)`:
+   final_title 컬럼만 update.
+3. 유저 조회/편집은 Express 엔드포인트로:
+   - `GET /redline-log/:date/view` — 브라우저 뷰어 (HTML + marked.js 렌더, 토큰 인증).
+   - `GET /redline-log/:date` — JSON ({ auto_log, user_notes, final_title, markdown }).
+   - `PATCH /redline-log/:date { user_notes }` — 유저 메모 저장.
+   - `GET /redline-log/:date/download` — `redline-YYYY-MM-DD.md` 다운로드 (옵시디언 호환).
+
+### 집계 정의
+- 수집 = 사전 필터(SUMMARY/BLOCKED/OPINION/WEAK) 통과 후 redline 에 진입한 건수.
+- 차단 = redline 블록 건수 (url dedupe 후).
+- 통과 = redline 통과 건수 (url dedupe 후, top-30 cut 이전).
+- 최종 선정 = Stage 2 `pickBestNews` 선정 결과.
+
+### 인증
+환경변수 `REDLINE_LOG_TOKEN` 설정 시 Bearer / `?token=` / localStorage 셋 중 하나로 일치해야 접근 가능. 미설정 시 개방(로컬 개발용 — 프로덕션에는 반드시 설정).
+
+### 확장
+순수 함수 `buildAutoLog(...)` / `mergeLog(...)` 는 I/O 없음. 추후 GitHub 자동 push /
+옵시디언 동기화 등 exporter 모듈에서 재사용 가능.
+
 ## 변경 이력
 
 | 날짜 | 변경 |

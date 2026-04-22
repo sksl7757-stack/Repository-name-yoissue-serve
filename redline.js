@@ -1,7 +1,7 @@
 'use strict';
 
 // Stage 1 redline — news_raw 적재 전 제목 기준 차단.
-// 카테고리 A(윤리·법적) + B(편향 방어) 13개. 매칭 시 { blocked, reason } 리턴.
+// 카테고리 A(윤리·법적) + B(편향 방어) 13개. 매칭 시 { blocked, reason, matched } 리턴.
 // 유지보수 메모는 REDLINE.md 참고.
 
 // ─── B-1 POLITICIANS 리스트 ──────────────────────────────────────────────────
@@ -38,15 +38,28 @@ function matchesPolitician(title, name) {
 }
 
 // ─── 매칭 헬퍼 ───────────────────────────────────────────────────────────────
-const single    = (kws)       => (title) => kws.some(kw => title.includes(kw));
-const pair      = (req, wth)  => (title) => req.some(r => title.includes(r)) && wth.some(w => title.includes(w));
-const anyCheck  = (...checks) => (title) => checks.some(c => c(title));
+// 매치되면 키워드 문자열(또는 조합) 반환, 아니면 null.
+const single    = (kws)       => (title) => kws.find(kw => title.includes(kw)) || null;
+const pair      = (req, wth)  => (title) => {
+  const r = req.find(x => title.includes(x));
+  if (!r) return null;
+  const w = wth.find(x => title.includes(x));
+  return w ? `${r}+${w}` : null;
+};
+const anyCheck  = (...checks) => (title) => {
+  for (const c of checks) {
+    const m = c(title);
+    if (m) return m;
+  }
+  return null;
+};
 
 // ─── 카테고리 정의 ───────────────────────────────────────────────────────────
 const REDLINE_CATEGORIES = [
   // ─── A (윤리·법적) ──────────────────────────────────────────────────────
   {
     name: 'suicide',
+    label: 'A-1 자살',
     check: single([
       '자살', '투신', '목을 매', '목매', '극단적 선택',
       '자살 시도', '자살률', '자해', '자살 기도', '음독',
@@ -56,6 +69,7 @@ const REDLINE_CATEGORIES = [
   },
   {
     name: 'minor_sex',
+    label: 'A-2 미성년성범죄',
     check: pair(
       ['미성년', '미성년자', '아동', '청소년',
        '초등학생', '중학생', '고등학생', '10대',
@@ -68,6 +82,7 @@ const REDLINE_CATEGORIES = [
   },
   {
     name: 'brutal_crime',
+    label: 'A-3 잔혹범죄',
     check: single([
       '토막살인', '시신 훼손', '시신 유기', '사지 절단',
       '잔혹 살해', '엽기 살해', '보복 살해',
@@ -78,6 +93,7 @@ const REDLINE_CATEGORIES = [
   },
   {
     name: 'minor_sexual',
+    label: 'A-4 아청물',
     check: single([
       '아동 포르노', '아청물', '아동성착취물', '아동음란물',
       '미성년자 음란물', '딥페이크 성범죄',
@@ -88,11 +104,13 @@ const REDLINE_CATEGORIES = [
   // ─── B (편향 방어) ──────────────────────────────────────────────────────
   {
     name: 'politicians',
-    check: (title) => REDLINE_B_POLITICIANS.some(n => matchesPolitician(title, n)),
+    label: 'B-1 정치인',
+    check: (title) => REDLINE_B_POLITICIANS.find(n => matchesPolitician(title, n)) || null,
     whitelist: [],
   },
   {
     name: 'election',
+    label: 'B-2 선거',
     check: anyCheck(
       single([
         '총선', '대선', '지방선거', '재보궐', '재보궐선거',
@@ -103,14 +121,23 @@ const REDLINE_CATEGORIES = [
         '정당 지지율', '비례대표', '국회의장', '원내대표',
       ]),
       // 조합: '공약' + (대선/후보/선거)
-      (title) => title.includes('공약') && ['대선', '후보', '선거'].some(k => title.includes(k)),
+      (title) => {
+        if (!title.includes('공약')) return null;
+        const k = ['대선', '후보', '선거'].find(x => title.includes(x));
+        return k ? `공약+${k}` : null;
+      },
       // 조합: '캠프' + (선거/후보)
-      (title) => title.includes('캠프') && ['선거', '후보'].some(k => title.includes(k)),
+      (title) => {
+        if (!title.includes('캠프')) return null;
+        const k = ['선거', '후보'].find(x => title.includes(x));
+        return k ? `캠프+${k}` : null;
+      },
     ),
     whitelist: [],
   },
   {
     name: 'armed_conflict',
+    label: 'B-3 무력분쟁',
     check: single([
       // 고유명사
       '우크라이나 전쟁', '가자지구', '가자 전쟁',
@@ -125,6 +152,7 @@ const REDLINE_CATEGORIES = [
   },
   {
     name: 'nk_provoke',
+    label: 'B-4 북한도발',
     check: pair(
       ['북한', '김정은', '김여정', '평양',
        '조선중앙통신', '조선로동당', '조선인민군', '노동신문'],
@@ -137,6 +165,7 @@ const REDLINE_CATEGORIES = [
   },
   {
     name: 'historical',
+    label: 'B-5 역사현안',
     check: single([
       '친일', '친일파', '강제동원', '강제징용', '위안부',
       '5·18', '5.18', '광주민주화',
@@ -151,6 +180,7 @@ const REDLINE_CATEGORIES = [
   },
   {
     name: 'trial_investigation',
+    label: 'B-6 수사재판',
     check: single([
       '검찰 수사', '경찰 수사', '압수수색', '구속영장',
       '기소', '선고', '항소심', '상고심',
@@ -165,6 +195,7 @@ const REDLINE_CATEGORIES = [
   },
   {
     name: 'faction_clash',
+    label: 'B-7 진영갈등',
     check: anyCheck(
       single([
         '여야 충돌', '여야 공방', '정쟁',
@@ -183,6 +214,7 @@ const REDLINE_CATEGORIES = [
   },
   {
     name: 'religion_eval',
+    label: 'B-8 종교평가',
     check: single([
       '이단', '사이비', '전광훈',
       'JMS', '신천지', '통일교', '천부교', '정명석',
@@ -192,29 +224,43 @@ const REDLINE_CATEGORIES = [
   },
   {
     name: 'sanctions',
+    label: 'B-9 제재',
     check: anyCheck(
       single(['대러 제재', '대이란 제재', '대북 제재', '제재 강화', '경제 제재']),
       // 조합: '수출통제' + B-1 POLITICIANS — "트럼프 대러 수출통제" 컷, "반도체 수출통제" 통과.
-      (title) => title.includes('수출통제') &&
-                 REDLINE_B_POLITICIANS.some(n => matchesPolitician(title, n)),
+      // (B-1 이 카테고리 순서상 앞이라 실제로는 politicians 로 먼저 잡힘 — 백업 경로)
+      (title) => {
+        if (!title.includes('수출통제')) return null;
+        const p = REDLINE_B_POLITICIANS.find(n => matchesPolitician(title, n));
+        return p ? `수출통제+${p}` : null;
+      },
     ),
     whitelist: [],
   },
 ];
 
+// ─── 한국어 라벨 맵 (redlineLog 등 외부에서 카테고리 한국어명 조회용) ─────────
+const CATEGORY_LABELS = REDLINE_CATEGORIES.reduce((acc, cat) => {
+  acc[cat.name] = cat.label;
+  return acc;
+}, {});
+
 // ─── 공개 API ────────────────────────────────────────────────────────────────
 // whitelist 가 먼저 매칭되면 해당 카테고리는 통과.
 // 첫 매칭 카테고리로 reason 결정 (카테고리 순서가 우선순위).
+// matched: 매칭된 키워드 문자열 (single) 또는 조합 (pair/combo: "a+b").
 function isRedlineTitle(title) {
   for (const cat of REDLINE_CATEGORIES) {
     if (cat.whitelist.length > 0 && cat.whitelist.some(w => title.includes(w))) continue;
-    if (cat.check(title)) return { blocked: true, reason: `redline_${cat.name}` };
+    const matched = cat.check(title);
+    if (matched) return { blocked: true, reason: `redline_${cat.name}`, matched };
   }
-  return { blocked: false, reason: null };
+  return { blocked: false, reason: null, matched: null };
 }
 
 module.exports = {
   isRedlineTitle,
   REDLINE_CATEGORIES,
   REDLINE_B_POLITICIANS,
+  CATEGORY_LABELS,
 };
