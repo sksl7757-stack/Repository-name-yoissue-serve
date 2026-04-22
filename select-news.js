@@ -2,10 +2,11 @@
 
 // Stage 1: 수집만 — Naver API 호출 + 필터링 → news_raw 저장 (크롤링 없음)
 
-const { loadEnv }   = require('./loadEnv');
-const { supabase }  = require('./supabase');
-const { stripHtml } = require('./stripHtml');
-const { todayKST }  = require('./dateUtil');
+const { loadEnv }        = require('./loadEnv');
+const { supabase }       = require('./supabase');
+const { stripHtml }      = require('./stripHtml');
+const { todayKST }       = require('./dateUtil');
+const { isRedlineTitle } = require('./redline');
 
 loadEnv();
 
@@ -194,6 +195,7 @@ async function main() {
   // 1. 키워드별 버킷 수집 + 필터 동시 적용
   const queryBuckets = {};
   const overflowPool = [];
+  const redlineStats = { total: 0, byReason: {} };
 
   for (const query in QUERY_CONFIG) {
     const maxPerQuery = QUERY_CONFIG[query];
@@ -211,6 +213,14 @@ async function main() {
         if (isOpinion(title)) continue;
         if (isWeakNews(title)) continue;
 
+        const redline = isRedlineTitle(title);
+        if (redline.blocked) {
+          redlineStats.total++;
+          redlineStats.byReason[redline.reason] = (redlineStats.byReason[redline.reason] || 0) + 1;
+          console.log(`  🚫 [Redline] ${redline.reason} title="${title}"`);
+          continue;
+        }
+
         const item = { title, description, link };
         if (queryBuckets[query].length < maxPerQuery) {
           queryBuckets[query].push(item);
@@ -222,6 +232,15 @@ async function main() {
     } catch (e) {
       console.warn(`  [${query}] 수집 실패:`, e.message);
     }
+  }
+
+  if (redlineStats.total > 0) {
+    const breakdown = Object.entries(redlineStats.byReason)
+      .map(([reason, count]) => `${reason.replace(/^redline_/, '')}:${count}`)
+      .join(' / ');
+    console.log(`  📊 [Redline 집계] 총 ${redlineStats.total}건 블록 / ${breakdown}`);
+  } else {
+    console.log(`  📊 [Redline 집계] 블록 없음`);
   }
 
   // 2. 버킷 + overflow 전부 합친 뒤 impact 점수 순 top-30 (MIN_IMPACT 컷 없음 — GPT가 중요도 판단)
