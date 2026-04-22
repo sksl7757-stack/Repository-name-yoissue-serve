@@ -84,30 +84,39 @@ const SUMMARY_KEYWORDS = [
   '사설종합', '언론사설', '오늘의사설',
 ];
 
-// 수집 단계 도메인 차단. hostname.includes(d) 로 판정 → 서브도메인 자동 커버.
-// 차단 사유는 3종:
-//   A) 언론 비평·큐레이션 전문 매체 — 단독 뉴스 소스로 부적합.
-//   B) 유료/구독 페이월 매체 — 본문 크롤링 시 저작권 위반 리스크. COPYRIGHT.md 참고.
-//   C) 카테고리 부적합 — 대화형 앱 뉴스로 적합하지 않은 전문 와이어/업계지.
-const BLOCKED_DOMAINS = [
-  // A) 언론 비평·큐레이션
-  'mediatoday.co.kr',  // 미디어오늘
-  'mediawatch.kr',     // 미디어워치
-  // B) 유료 구독 페이월
-  'hankyung.com',      // 한국경제 (프리미엄 콘텐츠)
-  'mk.co.kr',          // 매일경제
-  'chosunbiz.com',     // 조선비즈
-  'mt.co.kr',          // 머니투데이
-  'sedaily.com',       // 서울경제
-  'edaily.co.kr',      // 이데일리
-  // C) 카테고리 부적합 (전문 금융/업계 와이어)
-  'einfomax.co.kr',    // 연합인포맥스 — 채권·외환·증권 속보 전문, 대중 대화형 앱에 부적합
+// 수집 단계 화이트리스트.
+// 기존 블랙리스트 방식은 새 유료화·품질 저하 매체를 끊임없이 추적해야 해서 누락 위험
+// (2026-04-22 한국경제 프리미엄 콘텐츠 사고 + 연합인포맥스 카테고리 부적합 건).
+// → 검증된 안전 매체만 허용하는 화이트리스트로 전환. COPYRIGHT.md 참고.
+//
+// 매칭은 정확 호스트 또는 엄격 서브도메인 (host === d || host.endsWith('.' + d)).
+// '.includes' 방식은 'malicious-kbs.co.kr' 같은 유사 호스트가 매치되는 스푸핑 리스크 있음.
+//
+// 2차 방어선: process-news.js 의 isInvalidContent 가 본문의 페이월/프리미엄 문구를 별도로
+// 차단 — 화이트리스트 매체라도 유료 섹션 기사는 통과 안 됨.
+const ALLOWED_DOMAINS = [
+  // 통신사
+  'yna.co.kr',        // 연합뉴스
+  'news1.kr',         // 뉴스1
+  'newsis.com',       // 뉴시스
+  // 공영·뉴스 전문
+  'kbs.co.kr',        // KBS (news.kbs.co.kr 포함)
+  'ytn.co.kr',        // YTN
+  // 지상파
+  'mbc.co.kr',        // MBC 본사
+  'imbc.com',         // MBC 뉴스 (imnews.imbc.com 포함)
+  'sbs.co.kr',        // SBS
+  // IT·기술
+  'etnews.com',       // 전자신문
+  'zdnet.co.kr',      // 지디넷
 ];
 
-function isBlockedDomain(link) {
+// 정확 매칭 또는 엄격 서브도메인 매칭. 'kbs.co.kr' 은 'kbs.co.kr' 과 '*.kbs.co.kr' 만 통과.
+// 'malicious-kbs.co.kr' / 'fakekbs.co.kr' 같은 유사 호스트는 차단.
+function isAllowedDomain(link) {
   try {
     const hostname = new URL(link).hostname.replace(/^www\./, '');
-    return BLOCKED_DOMAINS.some(d => hostname.includes(d));
+    return ALLOWED_DOMAINS.some(d => hostname === d || hostname.endsWith('.' + d));
   } catch {
     return false;
   }
@@ -227,7 +236,7 @@ async function main() {
         const link        = raw.originallink || raw.link;
 
         if (SUMMARY_KEYWORDS.some(kw => title.replace(/\s/g, '').includes(kw))) continue;
-        if (isBlockedDomain(link)) continue;
+        if (!isAllowedDomain(link)) continue;
         if (isOpinion(title)) continue;
         if (isWeakNews(title)) continue;
 
@@ -322,7 +331,7 @@ async function main() {
   console.log(`✅ [Stage 1] 완료: ${Date.now() - start}ms`);
 }
 
-module.exports = { main, scoreImpactTitle };
+module.exports = { main, scoreImpactTitle, isAllowedDomain, ALLOWED_DOMAINS };
 
 if (require.main === module) {
   main().catch(e => { console.error(e); process.exit(1); });
