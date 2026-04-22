@@ -14,17 +14,19 @@ loadEnv();
 const NAVER_ID     = (process.env.NAVER_CLIENT_ID     || '').replace(/[^\x20-\x7E]/g, '');
 const NAVER_SECRET = (process.env.NAVER_CLIENT_SECRET || '').replace(/[^\x20-\x7E]/g, '');
 
+// 타겟: 뉴스 잘 모르는 MZ. 시사 + 라이프 밸런스.
+// 제거: 외교(속보·정치로 흡수), 안보(B-4 레드라인 직통), 금융/환율금리(전문·유료),
+//       관세(트럼프 레드라인 직통), 기업·부동산(경제로 흡수).
+// 추가: 사회·IT/AI·건강·환경·문화.
 const QUERY_CONFIG = {
-  '속보':     8,   // 긴급 이슈
-  '외교':     6,   // 국제/외교
-  '안보':     6,   // 안보/군사
-  '정치':     6,   // 국내 정치
-  '경제':     5,   // 경제 전반
-  '금융':     5,   // 금융 시장
-  '환율금리': 5,   // 환율/금리
-  '관세':     4,   // 무역/관세
-  '기업':     5,   // 기업 이슈
-  '부동산':   4,   // 부동산
+  '속보':   8,   // 긴급 이슈
+  '정치':   7,   // 국내 정치
+  '경제':   7,   // 경제·부동산·기업 흡수
+  '사회':   7,   // 교육·복지·생활 (범죄는 레드라인 컷)
+  'IT/AI':  7,   // 인공지능·반도체·빅테크
+  '건강':   6,   // 의료·바이러스·생활건강
+  '환경':   6,   // 기후·에너지·원전
+  '문화':   5,   // 영화·음악·K팝·드라마
 };
 
 async function fetchNaverNews(query) {
@@ -85,30 +87,33 @@ const SUMMARY_KEYWORDS = [
 ];
 
 // 수집 단계 화이트리스트.
-// 기존 블랙리스트 방식은 새 유료화·품질 저하 매체를 끊임없이 추적해야 해서 누락 위험
-// (2026-04-22 한국경제 프리미엄 콘텐츠 사고 + 연합인포맥스 카테고리 부적합 건).
-// → 검증된 안전 매체만 허용하는 화이트리스트로 전환. COPYRIGHT.md 참고.
+// 저작권 리스크 최우선. 기존 블랙리스트는 유료화 매체 추적 누락 위험이 있어
+// 2026-04-22 화이트리스트로 전환했고, 이후 AI 학습·재가공 저작권 소송 동향을
+// 반영해 공영방송(KBS·MBC·SBS)·검증 부족 전문지(전자신문·지디넷) 제외하고
+// 공공저작물 3종을 추가. COPYRIGHT.md 참고.
 //
 // 매칭은 정확 호스트 또는 엄격 서브도메인 (host === d || host.endsWith('.' + d)).
 // '.includes' 방식은 'malicious-kbs.co.kr' 같은 유사 호스트가 매치되는 스푸핑 리스크 있음.
 //
+// 네이버 뉴스 래퍼(news.naver.com / n.news.naver.com) 는 originallink 로 대체 판정
+// — fetchNaverNews 에서 `raw.originallink || raw.link` 우선 사용.
+//
 // 2차 방어선: process-news.js 의 isInvalidContent 가 본문의 페이월/프리미엄 문구를 별도로
 // 차단 — 화이트리스트 매체라도 유료 섹션 기사는 통과 안 됨.
 const ALLOWED_DOMAINS = [
+  // 공공저작물 (저작권법 제24조의2 자유이용)
+  'korea.kr',              // 정책브리핑 (공공누리 라이선스)
+  'sciencetimes.co.kr',    // 사이언스타임즈 (한국과학창의재단 운영)
+  'science.ytn.co.kr',     // YTN 사이언스 (과기정통부+YTN 공동운영)
   // 통신사
-  'yna.co.kr',        // 연합뉴스
-  'news1.kr',         // 뉴스1
-  'newsis.com',       // 뉴시스
-  // 공영·뉴스 전문
-  'kbs.co.kr',        // KBS (news.kbs.co.kr 포함)
-  'ytn.co.kr',        // YTN
-  // 지상파
-  'mbc.co.kr',        // MBC 본사
-  'imbc.com',         // MBC 뉴스 (imnews.imbc.com 포함)
-  'sbs.co.kr',        // SBS
-  // IT·기술
-  'etnews.com',       // 전자신문
-  'zdnet.co.kr',      // 지디넷
+  'yna.co.kr',             // 연합뉴스
+  'news1.kr',              // 뉴스1
+  'newsis.com',            // 뉴시스
+  // 뉴스 전문
+  'ytn.co.kr',             // YTN
+  // IT 전문 — 사실전달 중심·AI 소송 비당사자로 저작권 리스크 상대적 낮음
+  'etnews.com',            // 전자신문
+  'zdnet.co.kr',           // 지디넷코리아
 ];
 
 // 정확 매칭 또는 엄격 서브도메인 매칭. 'kbs.co.kr' 은 'kbs.co.kr' 과 '*.kbs.co.kr' 만 통과.
@@ -331,7 +336,13 @@ async function main() {
   console.log(`✅ [Stage 1] 완료: ${Date.now() - start}ms`);
 }
 
-module.exports = { main, scoreImpactTitle, isAllowedDomain, ALLOWED_DOMAINS };
+module.exports = {
+  main, scoreImpactTitle,
+  isAllowedDomain, ALLOWED_DOMAINS,
+  QUERY_CONFIG, SUMMARY_KEYWORDS,
+  isOpinion, isWeakNews,
+  fetchNaverNews,
+};
 
 if (require.main === module) {
   main().catch(e => { console.error(e); process.exit(1); });

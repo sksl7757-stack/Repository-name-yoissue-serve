@@ -63,27 +63,59 @@ function pickMemorialNews(memorial, candidates) {
 // ─── 카테고리 ─────────────────────────────────────────────────────────────────
 
 // 단일 카테고리 리스트 — inferTag(태깅)과 isMixedContent([C] 드리프트 판정) 양쪽에서 공용.
-// 순서가 동점 처리 시 우선순위 (inferTag: 같은 점수면 앞쪽 항목 채택).
+// 배열 순서 = inferTag 동점 처리 우선순위.
+//
+// 플래그:
+//   separate_pipeline — 추모. inferTag 에서 스킵되어 일반 기사엔 태그가 절대 안 붙음.
+//     memorial day 에는 process-news 의 `memorial ?` 분기에서 '오늘의 픽 · 추모' 를 직접 부여.
+//     isMixedContent 잡탕 판정에는 그대로 포함 — 키워드 혼재 자체는 감지 대상.
+//   is_fallback — 사회. inferTag 에서 매치 0건일 때 기본 태그.
 const CATEGORIES = [
-  { name: '추모',   keywords: ['세월호', '이태원', '5·18', '5.18', '4·3', '광주민주화', '광주항쟁'] },
-  { name: 'IT',     keywords: ['인공지능', '생성형AI', 'AI모델', 'AI칩', 'AI반도체', 'AI서비스', '반도체', '빅테크', '구글', '삼성전자', '메타', '오픈AI', '챗GPT', '소프트웨어', '스타트업'] },
-  { name: '금융',   keywords: ['금리', '주가', '증시', '코스피', '코스닥', '달러', '환율', '채권', '은행', '금융', '연준', 'FOMC', '기준금리', '파월', '통화정책'] },
-  { name: '안보',   keywords: ['북한', '미사일', '핵', '안보', '군사', '국방', '합참', 'NATO', '나토', '병력', '도발'] },
-  { name: '국제',   keywords: ['미국', '중국', '러시아', '유럽', '이란', '트럼프', '바이든', '시진핑', '푸틴', '북한'] },
-  { name: '경제',   keywords: ['경제', '물가', '관세', '무역', '수출', '수입', 'GDP', '인플레', '성장률', '소비자', '소매판매', '고용지표', '실업률', '거시경제', '경기침체', '청문회', 'FTA', '자유무역', '무역협정', '재협상'] },
-  { name: '부동산', keywords: ['부동산', '아파트', '주택', '전세', '집값', '분양', '임대'] },
-  { name: '정치',   keywords: ['국회', '대통령', '여당', '야당', '선거', '정당', '탄핵', '의원', '정치'] },
-  { name: '건강',   keywords: ['의료', '건강', '병원', '백신', '바이러스', '코로나', '암', '질병'] },
-  { name: '환경',   keywords: ['기후', '탄소', '환경', '에너지', '원전', '태양광'] },
-  { name: '문화',   keywords: ['영화', '음악', '드라마', '문화', '예술', 'BTS', 'K팝', '아이돌', '공연'] },
-  { name: '스포츠', keywords: ['축구', '야구', '농구', '올림픽', '월드컵', '선수', '경기', '리그'] },
-  { name: '사회',   keywords: ['사건', '사고', '범죄', '복지', '교육', '학교', '노동'] },
+  {
+    name: '추모', emoji: '🕯️',
+    keywords: ['세월호', '이태원', '5·18', '4·3', '광주민주화'],
+    separate_pipeline: true,
+  },
+  {
+    name: '정치', emoji: '🏛️',
+    keywords: ['국회', '대통령', '여당', '야당', '선거', '탄핵', '의원',
+               '정부', '정책', '법안', '북한', '미사일', '국방', '합참',
+               'NATO', '외교', '정상회담'],
+  },
+  {
+    name: '경제', emoji: '📊',
+    keywords: ['경제', '물가', 'GDP', '인플레', '고용', '무역', '관세', 'FTA',
+               '금리', '증시', '코스피', '환율', '채권', '연준',
+               '부동산', '아파트', '집값', '전세', '분양',
+               '실적', '매출'],
+  },
+  {
+    name: 'IT', emoji: '💻',
+    keywords: ['인공지능', '생성형AI', '반도체', '빅테크'],
+  },
+  {
+    name: '건강', emoji: '🏥',
+    keywords: ['의료', '병원', '백신', '바이러스', '코로나', '암'],
+  },
+  {
+    name: '환경', emoji: '🌱',
+    keywords: ['기후', '탄소', '에너지', '원전', '태양광',
+               // 자연재해 — 기후변화 연관. 인재(화재·붕괴)는 제외하여 사회 fallback 으로 처리.
+               // 인명 피해 민감 뉴스는 redline A-1(suicide)·B-5(historical) 가 상위에서 차단.
+               '지진', '태풍', '홍수', '산불', '가뭄', '폭염', '한파'],
+  },
+  {
+    name: '문화', emoji: '🎭',
+    keywords: ['영화', '음악', '드라마', '예술', 'K팝', '공연', '콘서트',
+               '가수', '배우', '아이돌', '뮤지컬', '전시'],
+  },
+  {
+    name: '사회', emoji: '👥',
+    keywords: ['교육', '복지', '노동', '학교', '학생', '청년',
+               '저출산', '고령화', '여성', '장애인'],
+    is_fallback: true,
+  },
 ];
-
-const CATEGORY_EMOJI = {
-  '추모': '🕯️', 'IT': '💻', '금융': '💰', '경제': '📈', '부동산': '🏠',
-  '안보': '🛡️', '정치': '🏛️', '국제': '🌍', '건강': '🏥', '환경': '🌱', '문화': '🎭', '사회': '👥',
-};
 
 const DOMAIN_SOURCE = {
   'yna.co.kr': '연합뉴스', 'yonhapnewstv.co.kr': '연합뉴스TV',
@@ -99,9 +131,11 @@ const DOMAIN_SOURCE = {
 
 function inferTag(item) {
   const text = item.title + ' ' + (item.content || '');
-  let best = { name: '사회', count: 0, index: 999 };
+  const fallback = CATEGORIES.find(c => c.is_fallback);
+  let best = { name: fallback.name, count: 0, index: 999 };
 
   CATEGORIES.forEach((cat, index) => {
+    if (cat.separate_pipeline) return; // 추모 등 별도 파이프라인 카테고리는 일반 태깅에서 제외
     const count = cat.keywords.filter(k => text.includes(k)).length;
     if (count > best.count || (count === best.count && count > 0 && index < best.index)) {
       best = { name: cat.name, count, index };
@@ -112,8 +146,9 @@ function inferTag(item) {
 }
 
 function inferEmoji(tag) {
-  const category = tag.replace('오늘의 픽 · ', '');
-  return CATEGORY_EMOJI[category] || '📰';
+  const name = tag.replace('오늘의 픽 · ', '');
+  const cat = CATEGORIES.find(c => c.name === name);
+  return cat ? cat.emoji : '📰';
 }
 
 function inferSource(link) {
