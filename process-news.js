@@ -8,6 +8,7 @@ const { loadHistory } = require('./historyStore');
 const { stripHtml }        = require('./stripHtml');
 const { todayKST, mmddKST } = require('./dateUtil');
 const { classifyMourning } = require('./newsInterpreter');
+const { shouldPersistNews, MIN_CONTENT_LENGTH } = require('./newsGate');
 
 loadEnv();
 
@@ -478,6 +479,11 @@ async function main() {
   const pool = cleanContent.length > 0 ? cleanContent : deduped;
   console.log(`  잡탕 필터 후: ${pool.length}건`);
 
+  // 5-1. Picker 가드 — GPT 선정에만 healthy pool 을 전달.
+  // Memorial 은 pool 그대로 (관련 뉴스가 thin 뿐이면 Layer 4 에서 거부 → 어제 row 유지).
+  const pickPool = pool.filter(item => !item.isFallback && (item.content || '').length >= MIN_CONTENT_LENGTH);
+  console.log(`  picker 가드 후 (GPT 전용): ${pickPool.length}건`);
+
   // 6. 이력 로드
   const history = await loadHistory();
   console.log(`  이력 로드: ${history.length}건`);
@@ -499,14 +505,32 @@ async function main() {
 
   // 8. GPT 선정
   if (!selected) {
+    if (pickPool.length === 0) {
+      console.warn('  ⚠ picker 가드 후 pool 비어있음 — GPT 선정 불가, 어제 row 유지');
+      await markAllProcessed(rawRows);
+      console.log(`✅ [Stage 2] 완료 (선정 스킵): ${Date.now() - start}ms`);
+      return;
+    }
     console.log('  GPT 뉴스 선정 중...');
-    const best = await pickBestNews(pool, history);
+    const best = await pickBestNews(pickPool, history);
     selected = { item: best, finalScore: 0, eventId: '' };
   }
 
   // 8. 반응 생성 (선정된 기사만)
   const best = selected.item;
   console.log(`  선정: [${selected.finalScore.toFixed ? selected.finalScore.toFixed(2) : selected.finalScore}점] ${best.title}`);
+
+  // Layer 4 게이트 — daily_news 저장 최후 방어선.
+  // thin/orphan row 진입 시 프론트가 어제 row 대신 이상한 row 노출 → fail-loud.
+  // retry 루프 바깥 (saveAttempt 는 네트워크 실패용, content 품질은 재시도로 안 바뀜).
+  const gate = shouldPersistNews({ url: best.url, content: best.content, isFallback: best.isFallback });
+  if (!gate.ok) {
+    console.warn(`  🚫 [Gate 거부] reason=${gate.reason} — daily_news 저장 스킵, 어제 row 유지`);
+    console.warn(`     title=${(best.title || '').slice(0, 40)} url=${best.url || '(null)'} len=${(best.content || '').length} isFallback=${best.isFallback || false}`);
+    await markAllProcessed(rawRows);
+    console.log(`✅ [Stage 2] 완료 (게이트 거부): ${Date.now() - start}ms`);
+    return;
+  }
   // 9. news_processed + daily_news 저장
   const tag      = memorial ? '오늘의 픽 · 추모' : inferTag(best);
   const category = tag.replace('오늘의 픽 · ', '').trim();
