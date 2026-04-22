@@ -84,10 +84,19 @@ const SUMMARY_KEYWORDS = [
   '사설종합', '언론사설', '오늘의사설',
 ];
 
-// 언론 비평·큐레이션 전문 매체 — 단독 뉴스 소스로 부적합
+// 수집 단계 도메인 차단.
+// 1) 언론 비평·큐레이션 전문 매체 — 단독 뉴스 소스로 부적합.
+// 2) 유료/구독 페이월 매체 — 본문 크롤링 시 저작권 위반 리스크. COPYRIGHT.md 참고.
+//    hostname.includes(d) 로 판정하므로 서브도메인(plus.hankyung.com 등) 자동 커버.
 const BLOCKED_DOMAINS = [
   'mediatoday.co.kr',  // 미디어오늘
   'mediawatch.kr',     // 미디어워치
+  'hankyung.com',      // 한국경제 (유료 프리미엄 콘텐츠)
+  'mk.co.kr',          // 매일경제
+  'chosunbiz.com',     // 조선비즈
+  'mt.co.kr',          // 머니투데이
+  'sedaily.com',       // 서울경제
+  'edaily.co.kr',      // 이데일리
 ];
 
 function isBlockedDomain(link) {
