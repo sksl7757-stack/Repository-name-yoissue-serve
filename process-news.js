@@ -278,7 +278,7 @@ async function fetchArticleContent(url) {
       .join(' ');
     if (paragraphs.length > 0) {
       const pResult = paragraphs.slice(0, 1000);
-      if (!isInvalidContent(pResult) && !isMixedContent({ title: '', content: pResult }).filtered) return pResult;
+      if (!isInvalidContent(pResult)) return pResult;
     }
 
     // 2. div 본문 클래스 한정 파싱 + 품질 체크
@@ -289,7 +289,7 @@ async function fetchArticleContent(url) {
       .join(' ');
     if (divContent.length > 150) {
       const dResult = divContent.slice(0, 1000);
-      if (!isInvalidContent(dResult) && !isMixedContent({ title: '', content: dResult }).filtered) return dResult;
+      if (!isInvalidContent(dResult)) return dResult;
     }
 
     // 3. og:description fallback
