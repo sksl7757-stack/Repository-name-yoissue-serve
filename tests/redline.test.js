@@ -98,6 +98,10 @@ describe('isRedlineTitle', () => {
       expect(isRedlineTitle('가자 전쟁 사망자 증가'))
         .toEqual({ blocked: true, reason: 'redline_armed_conflict', matched: '가자 전쟁' });
     });
+    test('"종전" (이란-미국 종전 협상 무산 사례) → 블록', () => {
+      expect(isRedlineTitle('[채권-마감] 금리 상승…종전 협상 무산·外人 폭풍 매도'))
+        .toEqual({ blocked: true, reason: 'redline_armed_conflict', matched: '종전' });
+    });
   });
 
   describe('B-4 nk_provoke (pair)', () => {

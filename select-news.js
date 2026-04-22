@@ -84,19 +84,24 @@ const SUMMARY_KEYWORDS = [
   '사설종합', '언론사설', '오늘의사설',
 ];
 
-// 수집 단계 도메인 차단.
-// 1) 언론 비평·큐레이션 전문 매체 — 단독 뉴스 소스로 부적합.
-// 2) 유료/구독 페이월 매체 — 본문 크롤링 시 저작권 위반 리스크. COPYRIGHT.md 참고.
-//    hostname.includes(d) 로 판정하므로 서브도메인(plus.hankyung.com 등) 자동 커버.
+// 수집 단계 도메인 차단. hostname.includes(d) 로 판정 → 서브도메인 자동 커버.
+// 차단 사유는 3종:
+//   A) 언론 비평·큐레이션 전문 매체 — 단독 뉴스 소스로 부적합.
+//   B) 유료/구독 페이월 매체 — 본문 크롤링 시 저작권 위반 리스크. COPYRIGHT.md 참고.
+//   C) 카테고리 부적합 — 대화형 앱 뉴스로 적합하지 않은 전문 와이어/업계지.
 const BLOCKED_DOMAINS = [
+  // A) 언론 비평·큐레이션
   'mediatoday.co.kr',  // 미디어오늘
   'mediawatch.kr',     // 미디어워치
-  'hankyung.com',      // 한국경제 (유료 프리미엄 콘텐츠)
+  // B) 유료 구독 페이월
+  'hankyung.com',      // 한국경제 (프리미엄 콘텐츠)
   'mk.co.kr',          // 매일경제
   'chosunbiz.com',     // 조선비즈
   'mt.co.kr',          // 머니투데이
   'sedaily.com',       // 서울경제
   'edaily.co.kr',      // 이데일리
+  // C) 카테고리 부적합 (전문 금융/업계 와이어)
+  'einfomax.co.kr',    // 연합인포맥스 — 채권·외환·증권 속보 전문, 대중 대화형 앱에 부적합
 ];
 
 function isBlockedDomain(link) {
