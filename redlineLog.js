@@ -140,33 +140,46 @@ function isPlaceholderTitle(t) {
   return !t || t.startsWith('_(');
 }
 
-// auto_log + final_title + user_notes 를 하나의 마크다운으로 합침.
+// auto_log + final_title + user_notes + final_meta 를 하나의 마크다운으로 합침.
 // API `/redline-log/:date` 와 다운로드에서 재사용.
 //
 // final_title 이 실제 선정값일 때 2가지 가공 추가:
-//   1) 제목 바로 아래에 "📰 오늘 최종 선정" 스포트라이트 섹션 삽입 (## 요약 앞).
-//   2) "## ✅ 통과" 목록에서 해당 제목 라인에 ⭐ 표시.
-function mergeLog({ auto_log, user_notes, final_title }) {
+//   1) "## 요약" 직전에 "📰 오늘 최종 선정" 스포트라이트 섹션 삽입.
+//      final_meta 가 있으면 제목을 URL 하이퍼링크로, 출처/카테고리/원문 보기 링크도 포함.
+//   2) "## ✅ 통과" 목록에서 해당 제목 라인에 ⭐ 표시 + URL 링크로 변환.
+function mergeLog({ auto_log, user_notes, final_title, final_meta }) {
   let body = (auto_log || '').split(FINAL_TITLE_MARKER).join(final_title || FINAL_TITLE_PLACEHOLDER);
 
   if (!isPlaceholderTitle(final_title)) {
-    // (1) 스포트라이트 섹션 — "## 요약" 직전에 삽입.
-    const spotlight = [
-      '## 📰 오늘 최종 선정',
-      '',
-      `### ${final_title}`,
-      '',
-      '---',
-      '',
-      '',
-    ].join('\n');
+    const meta = final_meta || {};
+    const url  = meta.url || '';
+    const host = url ? hostnameOf(url) : '';
+
+    // (1) 스포트라이트 섹션.
+    const spotlight = [];
+    spotlight.push('## 📰 오늘 최종 선정');
+    spotlight.push('');
+    spotlight.push(url ? `### [${final_title}](${url})` : `### ${final_title}`);
+    spotlight.push('');
+    if (host)          spotlight.push(`- **출처**: ${host}`);
+    if (meta.category) spotlight.push(`- **카테고리**: ${meta.category}`);
+    if (url)           spotlight.push('');
+    if (url)           spotlight.push(`[🔗 원문 보기 →](${url})`);
+    spotlight.push('');
+    spotlight.push('---');
+    spotlight.push('');
+    spotlight.push('');
+
     const summaryIdx = body.indexOf('## 요약');
     if (summaryIdx !== -1) {
-      body = body.slice(0, summaryIdx) + spotlight + body.slice(summaryIdx);
+      body = body.slice(0, summaryIdx) + spotlight.join('\n') + body.slice(summaryIdx);
     }
+
     // (2) 통과 목록 마킹 — 첫 occurrence 만 (dedupe 후라 안전).
     const titleLine = `- **${final_title}**`;
-    const starLine  = `- ⭐ **${final_title}** _← 최종 선정_`;
+    const starLine  = url
+      ? `- ⭐ **[${final_title}](${url})** _← 최종 선정_`
+      : `- ⭐ **${final_title}** _← 최종 선정_`;
     body = body.replace(titleLine, starLine);
   }
 
@@ -262,6 +275,19 @@ async function getAdjacentDates(date) {
   };
 }
 
+// 뷰어에서 스포트라이트 섹션을 풍부하게 만들기 위해 daily_news 에서 URL/카테고리/출처를
+// 끌어온다. daily_news row 가 없으면(게이트 거부·수동 삭제) null 반환 → mergeLog 는
+// 기존처럼 title 만 표시.
+async function getDailyNewsMeta(date) {
+  const { data, error } = await supabase
+    .from('daily_news')
+    .select('title, url, category, source')
+    .eq('date', date)
+    .maybeSingle();
+  if (error) throw new Error(`daily_news 메타 조회 실패: ${error.message}`);
+  return data;
+}
+
 async function saveUserNotes(date, userNotes) {
   // 빈 문자열은 허용, null/undefined 은 '' 로 표준화.
   const normalized = typeof userNotes === 'string' ? userNotes : '';
@@ -283,6 +309,7 @@ module.exports = {
   saveUserNotes,
   listLogs,
   getAdjacentDates,
+  getDailyNewsMeta,
   DEFAULT_USER_NOTES,
   FINAL_TITLE_PLACEHOLDER,
   FINAL_TITLE_MARKER,

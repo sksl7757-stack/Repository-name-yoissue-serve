@@ -813,6 +813,7 @@ const {
   saveUserNotes: saveRedlineUserNotes,
   listLogs: listRedlineLogs,
   getAdjacentDates: getRedlineAdjacent,
+  getDailyNewsMeta: getRedlineDailyMeta,
   DEFAULT_USER_NOTES: REDLINE_DEFAULT_USER_NOTES,
 } = require('./redlineLog');
 
@@ -860,15 +861,17 @@ app.get('/redline-log/:date', requireRedlineToken, async (req, res) => {
   const date = req.params.date;
   if (!DATE_RE.test(date)) return res.status(400).json({ error: 'invalid date' });
   try {
-    const [row, adjacent] = await Promise.all([
+    const [row, adjacent, meta] = await Promise.all([
       getRedlineLog(date),
       getRedlineAdjacent(date),
+      getRedlineDailyMeta(date),
     ]);
     if (!row) return res.status(404).json({ error: 'not_found', date, prev: adjacent.prev, next: adjacent.next });
-    const markdown = mergeRedlineLog(row);
+    const markdown = mergeRedlineLog({ ...row, final_meta: meta });
     res.json({
       date: row.date,
       final_title: row.final_title,
+      final_meta:  meta,
       user_notes:  row.user_notes,
       auto_log:    row.auto_log,
       markdown,
@@ -902,9 +905,12 @@ app.get('/redline-log/:date/download', requireRedlineToken, async (req, res) => 
   const date = req.params.date;
   if (!DATE_RE.test(date)) return res.status(400).send('invalid date');
   try {
-    const row = await getRedlineLog(date);
+    const [row, meta] = await Promise.all([
+      getRedlineLog(date),
+      getRedlineDailyMeta(date),
+    ]);
     if (!row) return res.status(404).send('not found');
-    const markdown = mergeRedlineLog(row);
+    const markdown = mergeRedlineLog({ ...row, final_meta: meta });
     res.setHeader('Content-Type', 'text/markdown; charset=utf-8');
     res.setHeader('Content-Disposition', `attachment; filename="redline-${date}.md"`);
     res.send(markdown);

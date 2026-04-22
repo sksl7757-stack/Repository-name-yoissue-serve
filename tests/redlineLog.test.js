@@ -113,16 +113,32 @@ describe('mergeLog', () => {
     expect(merged).not.toContain('## 📰 오늘 최종 선정');
   });
 
-  test('final_title 있음 → 치환 + 스포트라이트 섹션이 요약 앞에 삽입', () => {
+  test('final_title 있음 (메타 없음) → 스포트라이트에 링크 없이 제목만', () => {
     const merged = mergeLog({ auto_log: sampleAuto, user_notes: '', final_title: '반도체 수출 증가' });
-    expect(merged).toContain('- 최종 선정: 반도체 수출 증가');
-    expect(merged).not.toContain(FINAL_TITLE_MARKER);
     expect(merged).toContain('## 📰 오늘 최종 선정');
     expect(merged).toContain('### 반도체 수출 증가');
+    expect(merged).not.toContain('### [반도체 수출 증가]');
+    expect(merged).not.toContain('원문 보기');
     expect(merged.indexOf('## 📰 오늘 최종 선정')).toBeLessThan(merged.indexOf('## 요약'));
   });
 
-  test('final_title 이 통과 목록의 제목과 일치 → ⭐ 표시 삽입', () => {
+  test('final_meta 있음 → 제목 하이퍼링크 + 출처/카테고리/원문 링크', () => {
+    const merged = mergeLog({
+      auto_log: sampleAuto,
+      user_notes: '',
+      final_title: '반도체 수출 증가',
+      final_meta: {
+        url: 'https://news.einfomax.co.kr/articles/12345',
+        category: '경제',
+      },
+    });
+    expect(merged).toContain('### [반도체 수출 증가](https://news.einfomax.co.kr/articles/12345)');
+    expect(merged).toContain('- **출처**: news.einfomax.co.kr');
+    expect(merged).toContain('- **카테고리**: 경제');
+    expect(merged).toContain('[🔗 원문 보기 →](https://news.einfomax.co.kr/articles/12345)');
+  });
+
+  test('final_title 이 통과 목록의 제목과 일치 → ⭐ + URL 링크', () => {
     const autoWithPassed = [
       '## 요약',
       `- 최종 선정: ${FINAL_TITLE_MARKER}`,
@@ -135,10 +151,26 @@ describe('mergeLog', () => {
       '  - 출처: other.com',
       '',
     ].join('\n');
+    const merged = mergeLog({
+      auto_log: autoWithPassed,
+      user_notes: '',
+      final_title: '반도체 수출 증가',
+      final_meta: { url: 'https://example.com/1', category: '경제' },
+    });
+    expect(merged).toContain('- ⭐ **[반도체 수출 증가](https://example.com/1)** _← 최종 선정_');
+    expect(merged).toContain('- **환율 안정세**'); // 다른 라인은 그대로
+  });
+
+  test('final_meta 없이 final_title 만 → 통과 목록에 ⭐ (링크 없이)', () => {
+    const autoWithPassed = [
+      '## 요약',
+      `- 최종 선정: ${FINAL_TITLE_MARKER}`,
+      '',
+      '- **반도체 수출 증가**',
+      '',
+    ].join('\n');
     const merged = mergeLog({ auto_log: autoWithPassed, user_notes: '', final_title: '반도체 수출 증가' });
     expect(merged).toContain('- ⭐ **반도체 수출 증가** _← 최종 선정_');
-    expect(merged).not.toContain('- **반도체 수출 증가**'); // 원본 라인은 치환됨
-    expect(merged).toContain('- **환율 안정세**'); // 다른 라인은 그대로
   });
 
   test('게이트 거부 플레이스홀더(_(...)_)는 스포트라이트 없음', () => {
