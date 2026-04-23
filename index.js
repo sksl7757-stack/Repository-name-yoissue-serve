@@ -1366,24 +1366,26 @@ const { main: selectNews }  = require('./select-news');
 const { main: processNews } = require('./process-news');
 const { main: sendPush }    = require('./send-push');
 
-// 매일 UTC 21:00 — 뉴스 수집
-cron.schedule('0 21 * * *', async () => {
+// TZ 인자를 명시해 컨테이너 로컬 TZ 영향 제거. 모든 스케줄은 KST 기준.
+const CRON_TZ = { timezone: 'Asia/Seoul' };
+
+// 매일 KST 07:00 — 뉴스 수집
+cron.schedule('0 7 * * *', async () => {
   console.log('[크론] select-news 시작');
   try { await selectNews(); } catch (e) { console.error('[크론] select-news 실패:', e.message); }
-});
+}, CRON_TZ);
 
-// 매일 UTC 21:15 — 뉴스 처리
-cron.schedule('15 21 * * *', async () => {
+// 매일 KST 07:15 — 뉴스 처리 (select-news 후 15분 여유)
+cron.schedule('15 7 * * *', async () => {
   console.log('[크론] process-news 시작');
   try { await processNews(); } catch (e) { console.error('[크론] process-news 실패:', e.message); }
-});
+}, CRON_TZ);
 
-// 매일 UTC 23:00 = KST 08:00 — 푸시 알림
-// process-news(21:15) 뒤 1h45m 여유. 너무 이른 알림(06:35) 피하기 위해 이동.
-cron.schedule('0 23 * * *', async () => {
+// 매일 KST 09:00 — 푸시 알림 (process-news + 이미지 생성 버퍼 1h45m)
+cron.schedule('0 9 * * *', async () => {
   console.log('[크론] send-push 시작');
   try { await sendPush(); } catch (e) { console.error('[크론] send-push 실패:', e.message); }
-});
+}, CRON_TZ);
 
 console.log('[크론] 스케줄러 등록 완료');
 
