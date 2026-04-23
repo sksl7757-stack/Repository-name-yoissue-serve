@@ -387,13 +387,17 @@ app.post('/chat', llmLimiter, async (req, res) => {
       second = decided.second;
     }
 
+    // 캐릭터별 히스토리 결정 — first/second 가 primary 아닐 때도 자기 히스토리 사용.
+    const firstMsgs  = first  === primaryChar ? messages : secMessages;
+    const secondMsgs = second === primaryChar ? messages : secMessages;
+
     // 첫 번째 캐릭터 스트리밍
     console.log('[chat] first:', first, '| isMourning:', isMourning, '| isDeepen:', isDeepen, '| hasStance:', !!stance);
-    const firstSystemPrompt = (await buildSystemPrompt(first, memory, { phase, messages, stance, isMourning, isDeepen })) + conversationHints;
+    const firstSystemPrompt = (await buildSystemPrompt(first, memory, { phase, messages: firstMsgs, stance, isMourning, isDeepen })) + conversationHints;
 
     sse('turn_start', { character: first });
     let firstText = '';
-    for await (const chunk of parseOpenAIStream(await generateReplyStream(firstSystemPrompt, messages, first))) {
+    for await (const chunk of parseOpenAIStream(await generateReplyStream(firstSystemPrompt, firstMsgs, first))) {
       const token = chunk.choices?.[0]?.delta?.content || '';
       if (token) { firstText += token; sse('token', { character: first, token }); }
     }
@@ -410,11 +414,11 @@ app.post('/chat', llmLimiter, async (req, res) => {
       await new Promise(r => setTimeout(r, 600));
       console.log('[chat] second:', second);
 
-      // 이어받기: secondary 자신의 히스토리 기반 + 마지막 user 턴에 first 발언 주입.
+      // 이어받기: 자기 히스토리 기반 + 마지막 user 턴에 first 발언 주입.
       // role: user 에 삽입 → GPT가 role: assistant 말투를 모방하지 않아 말투 오염 없음.
-      const secondMsgsWithHandoff = secMessages.map((m, i) => {
-        if (i === secMessages.length - 1 && m.role === 'user') {
-          return { ...m, content: `${m.content}\n\n(${first}이(가) 먼저 이렇게 반응했어: "${firstValidated.message}")` };
+      const secondMsgsWithHandoff = secondMsgs.map((m, i) => {
+        if (i === secondMsgs.length - 1 && m.role === 'user') {
+          return { ...m, content: `${m.content}\n\n(${first} 쪽에서 먼저 이렇게 반응했어: "${firstValidated.message}")` };
         }
         return m;
       });
