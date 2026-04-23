@@ -163,9 +163,44 @@ function mergeLog({ auto_log, user_notes, final_title, final_meta }) {
     spotlight.push('');
     if (host)          spotlight.push(`- **출처**: ${host}`);
     if (meta.category) spotlight.push(`- **카테고리**: ${meta.category}`);
+    if (meta.easy_title && meta.easy_title !== final_title) {
+      spotlight.push(`- **쉬운 제목**: ${meta.easy_title}`);
+    }
     if (url)           spotlight.push('');
     if (url)           spotlight.push(`[🔗 원문 보기 →](${url})`);
     spotlight.push('');
+
+    // 오늘의 대립 구도 — stance-news 가 GPT 1회 호출로 생성.
+    const stance = meta.stance;
+    if (meta.is_mourning_required) {
+      spotlight.push('## 🕯️ 대립 구도');
+      spotlight.push('');
+      spotlight.push('_추모 뉴스 — 대립 구도 생성 생략 (추모 모드는 양 캐릭터 공통 톤)._');
+      spotlight.push('');
+    } else if (stance && stance.axis) {
+      spotlight.push('## 🎭 오늘의 대립 구도');
+      spotlight.push('');
+      spotlight.push(`**축**: ${stance.axis}`);
+      spotlight.push('');
+      spotlight.push(`- 🌸 **하나 쪽**: ${stance.hana_side || '(미설정)'}`);
+      spotlight.push(`- ⚡ **준혁 쪽**: ${stance.junhyuk_side || '(미설정)'}`);
+      spotlight.push('');
+      spotlight.push('### 📐 선정 기준');
+      spotlight.push('');
+      spotlight.push('- 두 캐릭터(하나·준혁)가 자연스럽게 티격태격할 수 있는 대립축을 선택');
+      spotlight.push('- 각 캐릭터는 자신의 페르소나 성격(하나: 감성·공감, 준혁: 냉철·분석)을 유지하며 대립');
+      spotlight.push('- 정치 논쟁·이념 대립·인물 평가는 회피');
+      spotlight.push('- 축·각 쪽 설명 모두 한 줄 이내로 간결하게');
+      spotlight.push('');
+      spotlight.push('_생성: `stance-news.js` (GPT 1회 호출, KST 07:30 크론)._');
+      spotlight.push('');
+    } else {
+      spotlight.push('## 🎭 오늘의 대립 구도');
+      spotlight.push('');
+      spotlight.push('_아직 생성되지 않음. `node stance-news.js` 수동 실행 또는 KST 07:30 크론 대기 필요._');
+      spotlight.push('');
+    }
+
     spotlight.push('---');
     spotlight.push('');
     spotlight.push('');
@@ -281,7 +316,7 @@ async function getAdjacentDates(date) {
 async function getDailyNewsMeta(date) {
   const { data, error } = await supabase
     .from('daily_news')
-    .select('title, url, category, source')
+    .select('title, url, category, source, stance, easy_title, is_mourning_required')
     .eq('date', date)
     .maybeSingle();
   if (error) throw new Error(`daily_news 메타 조회 실패: ${error.message}`);
