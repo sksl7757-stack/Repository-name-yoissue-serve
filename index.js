@@ -391,6 +391,17 @@ app.post('/chat', llmLimiter, async (req, res) => {
     const firstMsgs  = first  === primaryChar ? messages : secMessages;
     const secondMsgs = second === primaryChar ? messages : secMessages;
 
+    // 히스토리 불일치 재발 방지 로그
+    const tail3 = (msgs) => msgs.slice(-3).map(m => m.role[0]).join(',') || '∅';
+    console.log(
+      `[chat/routing] primary=${primaryChar}`,
+      `| first=${first}(hist=${first === primaryChar ? 'primary' : 'secondary'})`,
+      `| second=${second ?? 'null'}${second ? `(hist=${second === primaryChar ? 'primary' : 'secondary'})` : ''}`,
+      `| firstMsgs[-3]=[${tail3(firstMsgs)}]`,
+      `| secondMsgs[-3]=[${second ? tail3(secondMsgs) : 'N/A'}]`,
+      `| isMourning:${isMourning} isDeepen:${isDeepen}`,
+    );
+
     // 첫 번째 캐릭터 스트리밍
     console.log('[chat] first:', first, '| isMourning:', isMourning, '| isDeepen:', isDeepen, '| hasStance:', !!stance);
     const firstSystemPrompt = (await buildSystemPrompt(first, memory, { phase, messages: firstMsgs, stance, isMourning, isDeepen })) + conversationHints;
