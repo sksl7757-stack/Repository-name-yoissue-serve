@@ -172,7 +172,7 @@ async function generateReply({ character, messages, memory, phase = 'INIT', stan
     },
     body: JSON.stringify({
       model: 'gpt-5.4-mini',
-      max_tokens: maxTokensFor(character),
+      max_completion_tokens: maxTokensFor(character),
       ...STYLE_PARAMS,
       response_format: { type: 'json_object' },
       messages: [
@@ -214,7 +214,7 @@ async function generateOpeningPair({ memory, stance }) {
     },
     body: JSON.stringify({
       model: 'gpt-5.4-mini',
-      max_tokens: 700,
+      max_completion_tokens: 700,
       ...STYLE_PARAMS,
       response_format: { type: 'json_object' },
       messages: [
@@ -244,7 +244,7 @@ async function generateReplyStream(systemPrompt, messages, character = null) {
     },
     body: JSON.stringify({
       model: 'gpt-5.4-mini',
-      max_tokens: maxTokensFor(character),
+      max_completion_tokens: maxTokensFor(character),
       ...STYLE_PARAMS,
       stream: true,
       messages: [

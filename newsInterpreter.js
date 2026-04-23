@@ -21,7 +21,7 @@ async function callGPT(systemMsg, userMsg, maxTokens = 150, signal) {
     },
     body: JSON.stringify({
       model: 'gpt-5.4-mini',
-      max_tokens: maxTokens,
+      max_completion_tokens: maxTokens,
       response_format: { type: 'json_object' },
       messages: [
         { role: 'system', content: systemMsg },

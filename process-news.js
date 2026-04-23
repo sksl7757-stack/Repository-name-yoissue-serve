@@ -408,7 +408,7 @@ ${candidates.map(c => `[${c.index}] ${c.title} (${c.source})\n    ${c.summary}`)
     },
     body: JSON.stringify({
       model: 'gpt-5.4-mini',
-      max_tokens: 200,
+      max_completion_tokens: 200,
       temperature: 0,
       response_format: { type: 'json_object' },
       messages: [{ role: 'user', content: prompt }],

@@ -45,7 +45,7 @@ async function callOpenAI(newsContext) {
     },
     body: JSON.stringify({
       model: 'gpt-5.4-mini',
-      max_tokens: 300,
+      max_completion_tokens: 300,
       temperature: 0.7,
       response_format: { type: 'json_object' },
       messages: [
