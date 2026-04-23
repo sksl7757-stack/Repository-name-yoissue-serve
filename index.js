@@ -331,8 +331,9 @@ app.post('/chat', llmLimiter, async (req, res) => {
 
   const sse = (event, data) => res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
 
-  const { user_id, messages: rawMessages, character, memory, choiceDone = false, turnCount = 0, isMourning = false, isDeepen = false, stance = null } = req.body;
+  const { user_id, messages: rawMessages, secondaryMessages: rawSecondaryMessages, character, memory, choiceDone = false, turnCount = 0, isMourning = false, isDeepen = false, stance = null } = req.body;
   const messages = sanitizeMessages(rawMessages);
+  const secMessages = rawSecondaryMessages ? sanitizeMessages(rawSecondaryMessages) : messages;
 
   // 영구 저장 준비 — user_id 없으면 스킵(후방 호환). 유저 마지막 발화를 즉시 기록해
   // 강제종료 시에도 원문 보존. conversation 생성은 비동기로 선행, 이후 assistant turn 에 재사용.
@@ -409,11 +410,20 @@ app.post('/chat', llmLimiter, async (req, res) => {
       await new Promise(r => setTimeout(r, 600));
       console.log('[chat] second:', second);
 
-      const secondSystemPrompt = (await buildSystemPrompt(second, memory, { phase, messages, stance, isDeepen })) + conversationHints;
+      // 이어받기: secondary 자신의 히스토리 기반 + 마지막 user 턴에 first 발언 주입.
+      // role: user 에 삽입 → GPT가 role: assistant 말투를 모방하지 않아 말투 오염 없음.
+      const secondMsgsWithHandoff = secMessages.map((m, i) => {
+        if (i === secMessages.length - 1 && m.role === 'user') {
+          return { ...m, content: `${m.content}\n\n(${first}이(가) 먼저 이렇게 반응했어: "${firstValidated.message}")` };
+        }
+        return m;
+      });
+
+      const secondSystemPrompt = (await buildSystemPrompt(second, memory, { phase, messages: secondMsgsWithHandoff, stance, isDeepen })) + conversationHints;
 
       sse('turn_start', { character: second });
       let secondText = '';
-      for await (const chunk of parseOpenAIStream(await generateReplyStream(secondSystemPrompt, messages, second))) {
+      for await (const chunk of parseOpenAIStream(await generateReplyStream(secondSystemPrompt, secondMsgsWithHandoff, second))) {
         const token = chunk.choices?.[0]?.delta?.content || '';
         if (token) { secondText += token; sse('token', { character: second, token }); }
       }
