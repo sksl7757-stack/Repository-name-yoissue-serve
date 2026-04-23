@@ -24,6 +24,7 @@ const {
   insertMessage,
   persistAssistantTurn,
 } = require('./services/persist');
+const { detectCrisis, CRISIS_MESSAGE } = require('./services/crisisFilter');
 
 const app = express();
 app.use(cors());
@@ -337,6 +338,33 @@ app.post('/chat', llmLimiter, async (req, res) => {
   const { user_id, messages: rawMessages, secondaryMessages: rawSecondaryMessages, character, memory, choiceDone = false, turnCount = 0, isMourning = false, isDeepen = false, stance = null } = req.body;
   const messages = sanitizeMessages(rawMessages);
   const secMessages = rawSecondaryMessages ? sanitizeMessages(rawSecondaryMessages) : messages;
+
+  // ── 크리시스 감지: LLM 호출 전 최전방 가드 ─────────────────────────────────
+  // 자살·자해·생명 포기성 1인칭 표현 감지 시 고정 안내문으로 즉시 응답.
+  // LLM 은 호출하지 않고, 원문은 로그에 남기지 않는다.
+  const lastUserMsg = [...messages].reverse().find(m => m.role === 'user');
+  if (lastUserMsg) {
+    const crisis = detectCrisis(lastUserMsg.content);
+    if (crisis.detected) {
+      console.log(
+        `[crisis/block] user=${user_id || 'anon'}`,
+        `char=${character}`,
+        `score=${crisis.score}`,
+        `matched=[${crisis.matched.join(',')}]`,
+        `textLen=${lastUserMsg.content.length}`,
+      );
+      sse('turn_start', { character });
+      sse('token', { character, token: CRISIS_MESSAGE });
+      sse('turn_end', {
+        character,
+        message: CRISIS_MESSAGE,
+        emotion: 'neutral',
+        type: 'crisis',
+      });
+      sse('done', { end: false });
+      return res.end();
+    }
+  }
 
   // 영구 저장 준비 — user_id 없으면 스킵(후방 호환). 유저 마지막 발화를 즉시 기록해
   // 강제종료 시에도 원문 보존. conversation 생성은 비동기로 선행, 이후 assistant turn 에 재사용.
