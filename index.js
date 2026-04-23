@@ -25,6 +25,7 @@ const {
   persistAssistantTurn,
 } = require('./services/persist');
 const { detectCrisis, CRISIS_MESSAGE } = require('./services/crisisFilter');
+const { moderateInput, MODERATION_FALLBACK_MESSAGE } = require('./services/inputModeration');
 
 const app = express();
 app.use(cors());
@@ -363,6 +364,40 @@ app.post('/chat', llmLimiter, async (req, res) => {
       });
       sse('done', { end: false });
       return res.end();
+    }
+  }
+
+  // ── 입력 Moderation: 위험 카테고리 차단 ─────────────────────────────────────
+  // crisis check 이후, persistence·LLM 호출 이전. 하드 블록 카테고리 감지 시
+  // 중립 fallback 으로 즉시 종료. API 실패는 fail-open (fallback 키워드 가드만 적용).
+  if (lastUserMsg) {
+    const mod = await moderateInput(lastUserMsg.content);
+    if (mod.blocked) {
+      console.log(
+        `[moderation/block] user=${user_id || 'anon'}`,
+        `char=${character}`,
+        `textLen=${lastUserMsg.content.length}`,
+        `flagged=true`,
+        `category=${mod.category}`,
+        `source=${mod.source}`,
+      );
+      sse('turn_start', { character });
+      sse('token', { character, token: MODERATION_FALLBACK_MESSAGE });
+      sse('turn_end', {
+        character,
+        message: MODERATION_FALLBACK_MESSAGE,
+        emotion: 'neutral',
+        type: 'moderation_block',
+      });
+      sse('done', { end: false });
+      return res.end();
+    }
+    if (mod.failOpen) {
+      console.error(
+        `[moderation/fail-open] user=${user_id || 'anon'}`,
+        `textLen=${lastUserMsg.content.length}`,
+        `error=${mod.error}`,
+      );
     }
   }
 
