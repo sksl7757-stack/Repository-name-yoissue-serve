@@ -13,7 +13,10 @@ const { supabase, getTodayNews } = require('./supabase');
 const MAX_RETRIES = 3;
 const RETRY_DELAY_MS = 5 * 60 * 1000;
 
-const STANCE_PROMPT = `너는 뉴스 한 건을 보고 두 캐릭터(하나, 준혁)가 자연스럽게 티격태격할 수 있는 대립 구도를 설정하는 AI.
+const STANCE_PROMPT = `너는 뉴스 한 건을 보고 두 가지를 출력하는 AI.
+
+① 두 캐릭터(하나, 준혁)가 자연스럽게 티격태격할 수 있는 대립 구도
+② 뉴스 제목을 일반인이 읽기 쉽게 바꾼 easy_title
 
 【캐릭터】
 - 하나: 감성·공감형 20대 여성. 뉴스를 사람·이야기·감정 축으로 해석.
@@ -23,13 +26,20 @@ const STANCE_PROMPT = `너는 뉴스 한 건을 보고 두 캐릭터(하나, 준
 {
   "axis":         "짧은 대립축 라벨 (예: 단기 vs 장기, 개인 선택 vs 공공 책임)",
   "hana_side":    "하나가 취할 쪽의 짧은 설명 (예: 단기 생활 체감)",
-  "junhyuk_side": "준혁이 취할 쪽의 짧은 설명 (예: 장기 구조 변화)"
+  "junhyuk_side": "준혁이 취할 쪽의 짧은 설명 (예: 장기 구조 변화)",
+  "easy_title":   "읽기 쉽게 바꾼 제목"
 }
 
-【원칙】
+【대립 구도 원칙】
 - 뉴스 맥락 안에서 두 캐릭터 성격과 자연스럽게 맞는 축을 선택
 - 정치 논쟁·이념 대립·인물 평가 회피
-- 축은 간결하게. 각 쪽 설명도 한 줄 이내`;
+- 축은 간결하게. 각 쪽 설명도 한 줄 이내
+
+【easy_title 원칙】
+- 어려운 전문 용어는 쉬운 말로 변환 (예: 지정학적 충격 → 분쟁)
+- 사실 내용 유지 — 왜곡·과장·축소 금지
+- 의미가 달라지는 변환 금지 (예: 유가 → 기름값 X, 다른 개념)
+- 뉴스 느낌 유지`;
 
 function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 
@@ -66,7 +76,8 @@ async function callOpenAI(newsContext) {
   if (!stance.axis || !stance.hana_side || !stance.junhyuk_side) {
     throw new Error('stance JSON 필드 누락: ' + JSON.stringify(parsed));
   }
-  return stance;
+  const easy_title = String(parsed.easy_title || '').trim();
+  return { stance, easy_title };
 }
 
 async function generateWithRetry(newsContext) {
@@ -112,17 +123,19 @@ async function generateWithRetry(newsContext) {
   const bodyText = news.content && news.content.length >= 100 ? news.content : summaryText;
   const newsContext = `분류: ${news.category}\n제목: ${news.title}\n요약: ${summaryText}${bodyText ? '\n본문: ' + bodyText : ''}`;
 
-  const stance = await generateWithRetry(newsContext);
+  const { stance, easy_title } = await generateWithRetry(newsContext);
   console.log('\n=== 생성된 stance ===');
   console.log(JSON.stringify(stance, null, 2));
+  console.log('\n=== easy_title ===');
+  console.log(easy_title || '(없음)');
 
   const { error } = await supabase
     .from('daily_news')
-    .update({ stance })
+    .update({ stance, easy_title: easy_title || null })
     .eq('date', news.date);
   if (error) throw new Error('Supabase UPDATE 실패: ' + error.message);
 
-  console.log('\n✓ daily_news.stance 업데이트 완료 (date=' + news.date + ')');
+  console.log('\n✓ daily_news.stance + easy_title 업데이트 완료 (date=' + news.date + ')');
   process.exit(0);
 })().catch(e => {
   console.error('[stance-news] 치명적 오류:', e.message);
