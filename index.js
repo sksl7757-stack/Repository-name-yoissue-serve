@@ -32,6 +32,9 @@ app.use(express.json({ limit: '256kb' }));
 // Railway 앞단 프록시 → req.ip가 실제 클라이언트 IP를 반영하도록 설정.
 app.set('trust proxy', 1);
 
+// ── carryover 통계 (인-메모리, 프로세스 재시작 시 리셋) ─────────────────────────
+const carryoverStats = { count: 0, totalLen: 0, maxLen: 0 };
+
 // ── 레이트리밋: IP별 슬라이딩 윈도우 (인-메모리, 단일 인스턴스 전제) ───────────
 // Railway는 단일 컨테이너라 로컬 Map으로 충분. 멀티 인스턴스 전환 시 Redis 필요.
 
@@ -427,9 +430,22 @@ app.post('/chat', llmLimiter, async (req, res) => {
 
       // 이어받기: 자기 히스토리 기반 + 마지막 user 턴에 first 발언 주입.
       // role: user 에 삽입 → GPT가 role: assistant 말투를 모방하지 않아 말투 오염 없음.
+      const carryoverText = `\n\n(${first} 쪽에서 먼저 이렇게 반응했어: "${firstValidated.message}")`;
+      const carryLen = carryoverText.length;
+      const carryTokEst = Math.ceil(carryLen / 1.5); // 한국어 cl100k 기준 약 1.5자/토큰
+      carryoverStats.count++;
+      carryoverStats.totalLen += carryLen;
+      carryoverStats.maxLen = Math.max(carryoverStats.maxLen, carryLen);
+      const avgLen = Math.round(carryoverStats.totalLen / carryoverStats.count);
+      console.log(
+        `[carryover] len=${carryLen} tok≈${carryTokEst}`,
+        `| avg=${avgLen} max=${carryoverStats.maxLen} n=${carryoverStats.count}`,
+        `| preview="${carryoverText.slice(0, 80).replace(/\n/g, '↵')}"`,
+      );
+
       const secondMsgsWithHandoff = secondMsgs.map((m, i) => {
         if (i === secondMsgs.length - 1 && m.role === 'user') {
-          return { ...m, content: `${m.content}\n\n(${first} 쪽에서 먼저 이렇게 반응했어: "${firstValidated.message}")` };
+          return { ...m, content: `${m.content}${carryoverText}` };
         }
         return m;
       });
