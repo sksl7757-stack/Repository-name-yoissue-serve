@@ -100,6 +100,14 @@ const REDLINE_CATEGORIES = [
     ]),
     whitelist: [],
   },
+  {
+    name: 'sexual_product',
+    label: 'A-5 성인제품',
+    check: single([
+      '콘돔',
+    ]),
+    whitelist: [],
+  },
 
   // ─── B (편향 방어) ──────────────────────────────────────────────────────
   {
