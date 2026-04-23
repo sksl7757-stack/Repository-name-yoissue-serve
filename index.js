@@ -6,7 +6,7 @@ if (fs.existsSync(__dirname + '/.env')) {
 const express = require('express');
 const cors = require('cors');
 
-const { getState, updateState } = require('./stateManager');
+const { getState } = require('./stateManager');
 const { generateReply, generateReplyStream, parseOpenAIStream, buildSystemPrompt } = require('./generator');
 const { validate } = require('./validator');
 
@@ -281,17 +281,16 @@ app.post('/chat-init', llmLimiter, async (req, res) => {
 
   try {
     const primaryRaw      = await generateReply({ character, messages, memory, phase: 'INIT', characterEmotion, isMourning });
-    const primaryValidated = validate({ reply: primaryRaw.text, phase: 'INIT', character, isMourning });
+    const primaryValidated = validate({ reply: primaryRaw.text });
 
     persistAssistantTurn(conversationPromise, character, primaryValidated.message);
 
-    // 추모 모드: primary 1명만 반환, 질문 스킵
+    // 추모 모드: primary 1명만 반환
     if (isMourning) {
       res.json({
         turns: [
           { character, message: primaryValidated.message, emotion: 'neutral' },
         ],
-        question: null,
       });
       return;
     }
@@ -299,19 +298,15 @@ app.post('/chat-init', llmLimiter, async (req, res) => {
     const secChar = secondaryChar || (character === '하나' ? '준혁' : '하나');
     const secEmotion = characterEmotion === 'positive' ? 'negative' : 'positive';
     const secondaryRaw      = await generateReply({ character: secChar, messages, memory, phase: 'INIT', primaryCharName: character, primaryComment: primaryValidated.message, primaryEmotion: primaryRaw.emotion, characterEmotion: secEmotion });
-    const secondaryValidated = validate({ reply: secondaryRaw.text, phase: 'CHAT', character: secChar });
+    const secondaryValidated = validate({ reply: secondaryRaw.text });
 
     persistAssistantTurn(conversationPromise, secChar, secondaryValidated.message);
-    if (primaryValidated.question) {
-      persistAssistantTurn(conversationPromise, character, primaryValidated.question);
-    }
 
     res.json({
       turns: [
         { character, message: primaryValidated.message, emotion: primaryRaw.emotion },
         { character: secChar, message: secondaryValidated.message, emotion: secondaryRaw.emotion },
       ],
-      question: primaryValidated.question || null,
     });
   } catch (e) {
     res.status(500).json({ error: e.message });
@@ -326,7 +321,7 @@ app.post('/chat', llmLimiter, async (req, res) => {
 
   const sse = (event, data) => res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
 
-  const { user_id, type, messages: rawMessages, character, memory, perspectiveStep = 0, characterEmotion = null, secondaryEmotion = null, secondaryChar: reqSecondaryChar = null, choiceDone = false, turnCount = 0, isMourning = false } = req.body;
+  const { user_id, messages: rawMessages, character, memory, characterEmotion = null, secondaryEmotion = null, secondaryChar: reqSecondaryChar = null, choiceDone = false, turnCount = 0, isMourning = false, isDeepen = false } = req.body;
   const messages = sanitizeMessages(rawMessages);
 
   // 영구 저장 준비 — user_id 없으면 스킵(후방 호환). 유저 마지막 발화를 즉시 기록해
@@ -360,46 +355,27 @@ app.post('/chat', llmLimiter, async (req, res) => {
     : '';
 
   try {
-    // ── PERSPECTIVE_NEXT ────────────────────────────────────────────────────────
-    if (type === 'PERSPECTIVE_NEXT') {
-      if (perspectiveStep > 2) {
-        sse('turn_end', {
-          character,
-          message: character === '하나'
-            ? '나 이 얘기는 여기까지면 충분한 것 같아 🌸 내일 또 같이 보자'
-            : '이 정도면 핵심은 다 봤어. 내일 다시 보자',
-          emotion: 'neutral',
-        });
-        sse('done', { end: true });
-        res.end();
-        return;
-      }
-      console.log('[stance-in]', character, '→', characterEmotion);
-      const rawReply       = await generateReply({ character, messages, memory, perspectiveStep, isPerspectiveRequest: true, characterEmotion });
-      const validatedReply = validate({ reply: rawReply.text, phase: 'CHAT', character });
-      sse('turn_end', { character, message: validatedReply.message, emotion: rawReply.emotion });
-      persistAssistantTurn(conversationPromise, character, validatedReply.message);
-      if (validatedReply.question) persistAssistantTurn(conversationPromise, character, validatedReply.question);
-      sse('question',  { question: validatedReply.question || null });
-      sse('done',      { end: false });
-      res.end();
-      return;
-    }
-
     // ── 일반 채팅 ──────────────────────────────────────────────────────────────
     const primaryChar    = character;
     const secondaryChar  = reqSecondaryChar || (character === '하나' ? '준혁' : '하나');
-    const { phase, questionAsked } = getState(messages, perspectiveStep);
+    const { phase, questionAsked } = getState(messages);
 
     console.log('[emotion-in]', 'primary=', characterEmotion, '| secondary=', secondaryEmotion);
 
     // MOURNING 모드: 항상 primary 단독 응답, decideResponders/stance 전부 우회
+    // isDeepen (listen 버튼): 오프닝처럼 둘 다 등장 강제 — decideResponders 우회
     let first, second, firstEmotion, secondEmotion;
     if (isMourning) {
       first = primaryChar;
       second = null;
       firstEmotion = null;
       secondEmotion = null;
+    } else if (isDeepen) {
+      first = primaryChar;
+      second = secondaryChar;
+      const opposite = characterEmotion === 'positive' ? 'negative' : 'positive';
+      firstEmotion  = characterEmotion;
+      secondEmotion = opposite;
     } else {
       const emotionContext = { primary: characterEmotion, secondary: secondaryEmotion };
       const decided = await decideResponders(messages, primaryChar, secondaryChar, emotionContext);
@@ -412,7 +388,7 @@ app.post('/chat', llmLimiter, async (req, res) => {
 
     // 첫 번째 캐릭터 스트리밍
     console.log('[stance-in]', first, '→', firstEmotion, '| isMourning:', isMourning);
-    const firstSystemPrompt = (await buildSystemPrompt(first, memory, { perspectiveStep, phase, primaryCharName: null, primaryComment: null, primaryEmotion: null, messages, characterEmotion: firstEmotion, isMourning })) + conversationHints;
+    const firstSystemPrompt = (await buildSystemPrompt(first, memory, { phase, primaryCharName: null, primaryComment: null, primaryEmotion: null, messages, characterEmotion: firstEmotion, isMourning, isDeepen })) + conversationHints;
 
     sse('turn_start', { character: first });
     let firstText = '';
@@ -421,7 +397,7 @@ app.post('/chat', llmLimiter, async (req, res) => {
       if (token) { firstText += token; sse('token', { character: first, token }); }
     }
 
-    const firstValidated = validate({ reply: firstText, phase, character: first, isMourning });
+    const firstValidated = validate({ reply: firstText });
     console.log('first reply:', firstValidated.message?.slice(0, 80));
     const OFF_TOPIC_PATTERNS = ['오늘 뉴스 얘기', '오늘 주제 아님', '그건 내가 답하기', '뉴스 관련 얘기만', '다른 얘기는'];
     const firstOffTopic = OFF_TOPIC_PATTERNS.some(p => firstValidated.message?.includes(p));
@@ -434,7 +410,7 @@ app.post('/chat', llmLimiter, async (req, res) => {
       await new Promise(r => setTimeout(r, 600));
       console.log('[second-char]', second, '| primaryComment:', firstValidated.message?.slice(0, 30));
 
-      const secondSystemPrompt = (await buildSystemPrompt(second, memory, { perspectiveStep, phase, primaryCharName: first, primaryComment: firstValidated.message, primaryEmotion: firstEmotion, messages, characterEmotion: secondEmotion })) + conversationHints;
+      const secondSystemPrompt = (await buildSystemPrompt(second, memory, { phase, primaryCharName: first, primaryComment: firstValidated.message, primaryEmotion: firstEmotion, messages, characterEmotion: secondEmotion, isDeepen })) + conversationHints;
 
       sse('turn_start', { character: second });
       let secondText = '';
@@ -443,17 +419,12 @@ app.post('/chat', llmLimiter, async (req, res) => {
         if (token) { secondText += token; sse('token', { character: second, token }); }
       }
 
-      const secondValidated = validate({ reply: secondText, phase, character: second });
+      const secondValidated = validate({ reply: secondText });
       console.log('second reply:', secondValidated.message?.slice(0, 80));
       sse('turn_end', { character: second, message: secondValidated.message, emotion: secondEmotion || 'neutral' });
       persistAssistantTurn(conversationPromise, second, secondValidated.message);
     }
 
-    const updatedState = updateState({ phase, questionAsked }, { questionAsked: !!firstValidated.question });
-    console.log('state:', updatedState);
-
-    sse('question', { question: firstValidated.question || null });
-    if (firstValidated.question) persistAssistantTurn(conversationPromise, first, firstValidated.question);
     sse('done',     { end: false });
     res.end();
 

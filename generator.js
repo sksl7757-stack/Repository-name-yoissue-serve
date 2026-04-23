@@ -8,12 +8,10 @@ const {
   commonPrinciples,
   hardRule,
   noQuestionRule,
-  perspectiveRule,
-  actionRule,
+  deepenRule,
   characterLockRule,
   primaryDirectionRule,
   JSON_FORMAT_RULE,
-  stepInfoFor,
   stateRuleFor,
   sessionStanceRuleFor,
   secondaryFormatRuleFor,
@@ -21,6 +19,8 @@ const {
   secondaryContextBlockFor,
   memoryBlockFor,
   newsDetailBlockFor,
+  categoryFrameRuleFor,
+  politicalSafetyRuleFor,
 } = require('./prompts/blocks');
 
 // ─── 모드 판정 ─────────────────────────────────────────────────────────────
@@ -41,8 +41,6 @@ function isOpinionRequest(messages) {
 // ─── 시스템 프롬프트 조립 ─────────────────────────────────────────────────
 
 async function buildSystemPrompt(character, memory, {
-  isPerspectiveRequest = false,
-  perspectiveStep      = 0,
   phase                = 'INIT',
   primaryCharName      = null,
   primaryComment       = null,
@@ -50,6 +48,7 @@ async function buildSystemPrompt(character, memory, {
   messages             = [],
   characterEmotion     = null,
   isMourning           = false,
+  isDeepen             = false,
 } = {}) {
   console.log('[buildSystemPrompt] primaryCharName:', primaryCharName, '| has primaryComment:', !!primaryComment, '| isMourning:', isMourning);
 
@@ -63,14 +62,19 @@ async function buildSystemPrompt(character, memory, {
   const activeBasePrompt = basePromptFor(persona, { isMourning, primaryCharName, isOpinion });
 
   // SECONDARY 도 뉴스 detail 을 받아야 주제 앵커가 유지됨 (재설명 금지는 newsBlockRule 에서 처리)
+  // category 는 CATEGORIES(process-news.js) 의 한글 이름 그대로 저장됨 — 정치/경제/환경/건강/IT/문화/사회
   let newsDetailBlock = '';
+  let newsCategory = null;
   try {
     const news = await getTodayNews();
     newsDetailBlock = newsDetailBlockFor(news);
+    newsCategory = news?.category ?? null;
   } catch {}
 
   // 조건부 블록 — 빌더 내부에서 가드하므로 여기서는 그냥 호출
-  const sessionStanceRule     = sessionStanceRuleFor(characterEmotion, isMourning, character);
+  const sessionStanceRule     = sessionStanceRuleFor(characterEmotion, isMourning, character, newsCategory);
+  const politicalSafetyRule   = politicalSafetyRuleFor(isMourning);
+  const categoryFrameRule     = categoryFrameRuleFor(newsCategory, isMourning);
   const secondaryFormatRule   = secondaryFormatRuleFor(primaryCharName, primaryComment, primaryEmotion);
   const secondaryContextBlock = secondaryContextBlockFor(primaryCharName, primaryComment);
   const newsBlockRule         = newsBlockRuleFor(primaryCharName, primaryComment);
@@ -78,13 +82,12 @@ async function buildSystemPrompt(character, memory, {
 
   // SECONDARY / MOURNING 에서는 대다수 일반 규칙 스킵
   const skipGeneral = isSecondary || isMourning;
-  const activeStepInfo         = skipGeneral ? '' : (isPerspectiveRequest ? stepInfoFor(perspectiveStep) : '');
-  const activePerspective      = skipGeneral ? '' : (isPerspectiveRequest ? perspectiveRule : '');
-  const activeActionRule       = skipGeneral ? '' : (isPerspectiveRequest ? actionRule : '');
   const activeHardRule         = skipGeneral ? '' : hardRule;
   const activeCharacterLock    = skipGeneral ? '' : characterLockRule;
   const activeCommonPrinciples = skipGeneral ? '' : commonPrinciples;
   const activeStateRule        = skipGeneral ? '' : stateRuleFor(phase);
+  // 심화 블록은 MOURNING 에서는 스킵, SECONDARY 에서도 주입 (둘 다 심화 참여)
+  const activeDeepenRule       = (isDeepen && !isMourning) ? deepenRule : '';
 
   // primaryDirectionRule 은 primary 모드 전용 상수 — SECONDARY 에서는 빈 문자열
   const activePrimaryDirection = (isMourning || primaryCharName) ? '' : primaryDirectionRule;
@@ -96,8 +99,12 @@ async function buildSystemPrompt(character, memory, {
     console.log(`[stance] ${character} → ${characterEmotion}`);
   }
 
+  // 정치 평가 금지 + 카테고리 프레임은 SECONDARY 에서도 적용되어야 하므로
+  // skipGeneral 가드가 아니라 isMourning 가드(빌더 내부)로만 제한.
   return [
     sessionStanceRule,
+    politicalSafetyRule,
+    categoryFrameRule,
     activePrimaryDirection,
     activeSecondaryFormat,
     activeBasePrompt,
@@ -108,9 +115,7 @@ async function buildSystemPrompt(character, memory, {
     activeHardRule,
     noQuestionRule,
     activeStateRule,
-    activeStepInfo,
-    activePerspective,
-    activeActionRule,
+    activeDeepenRule,
     activeCharacterLock,
     activeSecondaryContext,
   ].filter(Boolean).join('');
@@ -133,10 +138,10 @@ const STYLE_PARAMS = {
   presence_penalty: 0.2,
 };
 
-async function generateReply({ character, messages, memory, perspectiveStep = 0, isPerspectiveRequest = false, phase = 'INIT', primaryCharName = null, primaryComment = null, primaryEmotion = null, characterEmotion = null, isMourning = false }) {
+async function generateReply({ character, messages, memory, phase = 'INIT', primaryCharName = null, primaryComment = null, primaryEmotion = null, characterEmotion = null, isMourning = false }) {
   const OPENAI_KEY = process.env.OPENAI_API_KEY?.replace(/['"]/g, '');
   // MOURNING 모드는 emotion 필드를 neutral 고정으로 받아도 상관없음 (프론트에서 항상 worry 이미지 사용)
-  const systemPrompt = await buildSystemPrompt(character, memory, { isPerspectiveRequest, perspectiveStep, phase, primaryCharName, primaryComment, primaryEmotion, messages, characterEmotion, isMourning }) + JSON_FORMAT_RULE;
+  const systemPrompt = await buildSystemPrompt(character, memory, { phase, primaryCharName, primaryComment, primaryEmotion, messages, characterEmotion, isMourning }) + JSON_FORMAT_RULE;
 
   const response = await fetch('https://api.openai.com/v1/chat/completions', {
     method: 'POST',

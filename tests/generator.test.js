@@ -5,9 +5,10 @@
 
 jest.mock('../supabase', () => ({
   getTodayNews: jest.fn().mockResolvedValue({
-    title:   '기준금리 동결 결정',
-    summary: ['금통위 회의', '시장 영향 관찰'],
-    content: '한국은행 금통위는 이번 회의에서 기준금리를 3.50% 수준으로 동결하기로 결정했다. '
+    title:    '기준금리 동결 결정',
+    category: '경제',
+    summary:  ['금통위 회의', '시장 영향 관찰'],
+    content:  '한국은행 금통위는 이번 회의에서 기준금리를 3.50% 수준으로 동결하기로 결정했다. '
       + '물가 상승 압력과 경기 회복 속도를 모두 고려한 판단이다. '
       + '시장에서는 다음 회의에서 방향 전환 가능성을 주시하고 있다.',
   }),
@@ -89,13 +90,12 @@ describe('buildSystemPrompt — CONVERSE 모드', () => {
     expect(out).toMatchSnapshot();
   });
 
-  test('하나 + isPerspectiveRequest + perspectiveStep=2', async () => {
+  test('하나 + isDeepen (listen 버튼 심화)', async () => {
     const out = await buildSystemPrompt('하나', null, {
-      phase:                'CHAT',
-      isPerspectiveRequest: true,
-      perspectiveStep:      2,
-      characterEmotion:     'positive',
-      messages:             NEWS_CONVERSE_MESSAGES,
+      phase:            'CHAT',
+      isDeepen:         true,
+      characterEmotion: 'positive',
+      messages:         NEWS_CONVERSE_MESSAGES,
     });
     expect(out).toMatchSnapshot();
   });
@@ -171,9 +171,44 @@ describe('buildSystemPrompt — 구조적 불변식 (리팩터링 가드)', () =
     const junNeg = await buildSystemPrompt('준혁', null, {
       phase: 'CHAT', characterEmotion: 'negative', messages: NEWS_CONVERSE_MESSAGES,
     });
-    expect(hanaPos).toContain('감성적 긍정');
-    expect(junPos).toContain('냉철한 긍정');
-    expect(hanaNeg).toContain('감성적 걱정');
-    expect(junNeg).toContain('냉철한 우려');
+    // 경제 카테고리 → positive:'낙관' / negative:'회의'
+    expect(hanaPos).toContain('감성적 낙관');
+    expect(junPos).toContain('냉철한 낙관');
+    expect(hanaNeg).toContain('감성적 회의');
+    expect(junNeg).toContain('냉철한 회의');
+  });
+
+  test('정치 평가 금지 규칙은 MOURNING 제외 전 모드에 주입', async () => {
+    const converse = await buildSystemPrompt('하나', null, {
+      phase: 'CHAT', characterEmotion: 'positive', messages: NEWS_CONVERSE_MESSAGES,
+    });
+    const secondary = await buildSystemPrompt('준혁', null, {
+      phase: 'INIT',
+      primaryCharName: '하나', primaryComment: '기대돼', primaryEmotion: 'positive',
+      characterEmotion: 'negative', messages: NEWS_CONVERSE_MESSAGES,
+    });
+    const mourning = await buildSystemPrompt('하나', null, {
+      isMourning: true, phase: 'INIT', messages: NEWS_CONVERSE_MESSAGES,
+    });
+    expect(converse).toContain('정치 평가 금지');
+    expect(secondary).toContain('정치 평가 금지');
+    expect(mourning).not.toContain('정치 평가 금지');
+  });
+
+  test('카테고리 프레임은 news.category 에 따라 분기 (MOURNING 제외)', async () => {
+    // 픽스처 category='경제' → '내 지갑·소비·일자리' 프레임
+    const converse = await buildSystemPrompt('하나', null, {
+      phase: 'CHAT', characterEmotion: 'positive', messages: NEWS_CONVERSE_MESSAGES,
+    });
+    expect(converse).toContain('카테고리 프레임');
+    expect(converse).toContain('"경제"');
+    expect(converse).toContain('내 지갑');
+  });
+
+  test('newsDetailBlock 에 분류 라인 주입', async () => {
+    const out = await buildSystemPrompt('하나', null, {
+      phase: 'CHAT', messages: NEWS_CONVERSE_MESSAGES,
+    });
+    expect(out).toContain('분류: 경제');
   });
 });

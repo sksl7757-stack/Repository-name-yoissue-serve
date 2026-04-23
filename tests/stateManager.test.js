@@ -2,10 +2,9 @@ const { getState, updateState, PHASE } = require('../stateManager');
 
 describe('getState', () => {
   test('빈 메시지 → INIT', () => {
-    const state = getState([], 0);
+    const state = getState([]);
     expect(state.phase).toBe(PHASE.INIT);
     expect(state.questionAsked).toBe(false);
-    expect(state.perspectiveStep).toBe(0);
   });
 
   test('assistant 없음 → INIT', () => {
@@ -52,27 +51,17 @@ describe('getState', () => {
     ]);
     expect(state.phase).toBe(PHASE.INIT);
   });
-
-  test('perspectiveStep 인자 그대로 반환', () => {
-    const state = getState([], 3);
-    expect(state.perspectiveStep).toBe(3);
-  });
 });
 
 describe('updateState', () => {
   test('questionAsked=true → CHAT', () => {
-    const next = updateState({ perspectiveStep: 0 }, { questionAsked: true });
+    const next = updateState({}, { questionAsked: true });
     expect(next.phase).toBe(PHASE.CHAT);
     expect(next.questionAsked).toBe(true);
   });
 
   test('questionAsked=false → INIT', () => {
-    const next = updateState({ perspectiveStep: 0 }, { questionAsked: false });
+    const next = updateState({}, { questionAsked: false });
     expect(next.phase).toBe(PHASE.INIT);
-  });
-
-  test('perspectiveStep 보존', () => {
-    const next = updateState({ perspectiveStep: 2 }, { questionAsked: true });
-    expect(next.perspectiveStep).toBe(2);
   });
 });

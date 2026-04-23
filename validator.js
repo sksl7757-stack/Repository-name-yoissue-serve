@@ -1,13 +1,5 @@
-// validator.js — 모든 규칙 통제. LLM 응답을 검증하고 강제로 수정.
-// 질문 추가/제거를 코드에서만 결정. 오프토픽 처리는 GPT 프롬프트 담당.
-const { PHASE } = require('./stateManager');
-
-// 코드에서 고정한 질문 — LLM이 생성한 질문을 사용하지 않음
-// 두 캐릭터의 대립 구도를 명확히 해서 퀵리플라이 선택으로 자연스럽게 연결
-const FORCED_QUESTIONS = {
-  하나: '준혁이랑 나랑 생각이 좀 다른데, 너는 어느 쪽이야?',
-  준혁: '하나랑 나 입장이 다른데. 넌 어느 쪽으로 봐?',
-};
+// validator.js — LLM 응답에서 긴 질문 문장만 제거.
+// 강제 질문 주입 없음. 질문은 오프닝 이후 새 3버튼(listen/opinion/question) 으로 유저가 주도.
 
 /**
  * '?'로 끝나는 문장을 모두 제거하고 남은 텍스트 반환.
@@ -32,35 +24,13 @@ function stripQuestions(text) {
 }
 
 /**
- * GPT 응답을 phase 기준으로 강제 수정.
+ * GPT 응답에서 긴 질문만 제거.
  *
- * INIT → LLM 질문 제거 후 코드 고정 질문을 별도 필드로 반환
- * CHAT → 질문 문장 무조건 제거, question = null
- * 추모 모드(isMourning=true) → 대립 구도 자체를 만들지 않으므로 FORCED_QUESTIONS 주입 스킵.
- *   phase와 무관하게 question=null 반환.
- *
- * @param {{ reply: string, phase: string, character: string, isMourning?: boolean }}
- * @returns {{ message: string, question: string|null }}
+ * @param {{ reply: string }}
+ * @returns {{ message: string }}
  */
-function validate({ reply, phase, character, isMourning = false }) {
-  // 추모 모드 → FORCED_QUESTIONS 주입 금지, 긴 질문만 정리 후 반환
-  if (isMourning) {
-    return { message: stripQuestions(reply), question: null };
-  }
-
-  // INIT → 설명(message) + 고정 질문(question) 분리 반환
-  if (phase === PHASE.INIT) {
-    const message = stripQuestions(reply);
-    const question = FORCED_QUESTIONS[character] || FORCED_QUESTIONS['하나'];
-    return { message, question };
-  }
-
-  // CHAT → 질문 무조건 제거, question = null
-  if (phase === PHASE.CHAT) {
-    return { message: stripQuestions(reply), question: null };
-  }
-
-  return { message: reply, question: null };
+function validate({ reply }) {
+  return { message: stripQuestions(reply) };
 }
 
 module.exports = { validate };
