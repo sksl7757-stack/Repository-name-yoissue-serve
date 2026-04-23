@@ -1364,6 +1364,7 @@ function renderRedlineListHtml() {
 const cron = require('node-cron');
 const { main: selectNews }  = require('./select-news');
 const { main: processNews } = require('./process-news');
+const { main: stanceNews }  = require('./stance-news');
 const { main: sendPush }    = require('./send-push');
 
 // TZ 인자를 명시해 컨테이너 로컬 TZ 영향 제거. 모든 스케줄은 KST 기준.
@@ -1379,6 +1380,12 @@ cron.schedule('0 7 * * *', async () => {
 cron.schedule('15 7 * * *', async () => {
   console.log('[크론] process-news 시작');
   try { await processNews(); } catch (e) { console.error('[크론] process-news 실패:', e.message); }
+}, CRON_TZ);
+
+// 매일 KST 07:30 — 대립 구도(stance) 생성 (process-news 후 15분 여유)
+cron.schedule('30 7 * * *', async () => {
+  console.log('[크론] stance-news 시작');
+  try { await stanceNews(); } catch (e) { console.error('[크론] stance-news 실패:', e.message); }
 }, CRON_TZ);
 
 // 매일 KST 09:00 — 푸시 알림 (process-news + 이미지 생성 버퍼 1h45m)

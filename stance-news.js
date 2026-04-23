@@ -98,11 +98,10 @@ async function generateWithRetry(newsContext) {
   throw lastErr;
 }
 
-(async () => {
+async function main() {
   const news = await getTodayNews();
   if (!news) {
-    console.error('오늘 daily_news 없음. 먼저 select-news.js + process-news.js 실행 필요.');
-    process.exit(1);
+    throw new Error('오늘 daily_news 없음. 먼저 select-news.js + process-news.js 실행 필요.');
   }
 
   console.log('=== 오늘 뉴스 ===');
@@ -112,7 +111,7 @@ async function generateWithRetry(newsContext) {
 
   if (news.is_mourning_required) {
     console.log('추모 뉴스 — stance 생성 생략 (추모 모드는 대립 없음)');
-    process.exit(0);
+    return { skipped: true, reason: 'mourning' };
   }
 
   if (news.stance && news.stance.axis) {
@@ -136,8 +135,17 @@ async function generateWithRetry(newsContext) {
   if (error) throw new Error('Supabase UPDATE 실패: ' + error.message);
 
   console.log('\n✓ daily_news.stance + easy_title 업데이트 완료 (date=' + news.date + ')');
-  process.exit(0);
-})().catch(e => {
-  console.error('[stance-news] 치명적 오류:', e.message);
-  process.exit(1);
-});
+  return { skipped: false, date: news.date };
+}
+
+module.exports = { main };
+
+// 직접 실행(`node stance-news.js`) 시에만 IIFE 로 프로세스 종료까지 처리.
+if (require.main === module) {
+  main()
+    .then(() => process.exit(0))
+    .catch(e => {
+      console.error('[stance-news] 치명적 오류:', e.message);
+      process.exit(1);
+    });
+}
