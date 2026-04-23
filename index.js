@@ -409,14 +409,13 @@ app.post('/chat', llmLimiter, async (req, res) => {
       await new Promise(r => setTimeout(r, 600));
       console.log('[chat] second:', second);
 
-      // second는 first 발언을 보고 이어받아야 하므로 시스템 프롬프트에 컨텍스트 노트로 주입.
-      // assistant 메시지에 추가하면 second가 first 말투를 흉내낼 수 있으므로 시스템에만 넣음.
-      const firstContextNote = `\n\n【방금 ${first} 발언 — 참고만】\n"${firstValidated.message}"\n\n위 발언을 인지하고, 너(${second})의 관점·말투로만 이어받아라. 절대 위 발언 말투를 흉내내지 마라.`;
-      const secondSystemPrompt = (await buildSystemPrompt(second, memory, { phase, messages, stance, isDeepen })) + conversationHints + firstContextNote;
+      // second는 first 발언을 보고 이어받아야 하므로 first 발언을 context에 추가
+      const messagesWithFirst = [...messages, { role: 'assistant', content: `[${first}] ${firstValidated.message}` }];
+      const secondSystemPrompt = (await buildSystemPrompt(second, memory, { phase, messages: messagesWithFirst, stance, isDeepen })) + conversationHints;
 
       sse('turn_start', { character: second });
       let secondText = '';
-      for await (const chunk of parseOpenAIStream(await generateReplyStream(secondSystemPrompt, messages, second))) {
+      for await (const chunk of parseOpenAIStream(await generateReplyStream(secondSystemPrompt, messagesWithFirst, second))) {
         const token = chunk.choices?.[0]?.delta?.content || '';
         if (token) { secondText += token; sse('token', { character: second, token }); }
       }
