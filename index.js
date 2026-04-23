@@ -409,13 +409,11 @@ app.post('/chat', llmLimiter, async (req, res) => {
       await new Promise(r => setTimeout(r, 600));
       console.log('[chat] second:', second);
 
-      // second는 first 발언을 보고 이어받아야 하므로 first 발언을 context에 추가
-      const messagesWithFirst = [...messages, { role: 'assistant', content: `[${first}] ${firstValidated.message}` }];
-      const secondSystemPrompt = (await buildSystemPrompt(second, memory, { phase, messages: messagesWithFirst, stance, isDeepen })) + conversationHints;
+      const secondSystemPrompt = (await buildSystemPrompt(second, memory, { phase, messages, stance, isDeepen })) + conversationHints;
 
       sse('turn_start', { character: second });
       let secondText = '';
-      for await (const chunk of parseOpenAIStream(await generateReplyStream(secondSystemPrompt, messagesWithFirst, second))) {
+      for await (const chunk of parseOpenAIStream(await generateReplyStream(secondSystemPrompt, messages, second))) {
         const token = chunk.choices?.[0]?.delta?.content || '';
         if (token) { secondText += token; sse('token', { character: second, token }); }
       }
