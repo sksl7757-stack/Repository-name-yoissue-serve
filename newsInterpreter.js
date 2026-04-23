@@ -20,7 +20,7 @@ async function callGPT(systemMsg, userMsg, maxTokens = 150, signal) {
       'Authorization': `Bearer ${key}`,
     },
     body: JSON.stringify({
-      model: 'gpt-4o-mini',
+      model: 'gpt-5.4-mini',
       max_tokens: maxTokens,
       response_format: { type: 'json_object' },
       messages: [

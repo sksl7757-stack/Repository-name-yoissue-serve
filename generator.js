@@ -171,7 +171,7 @@ async function generateReply({ character, messages, memory, phase = 'INIT', stan
       'Authorization': `Bearer ${OPENAI_KEY}`,
     },
     body: JSON.stringify({
-      model: 'gpt-4o-mini',
+      model: 'gpt-5.4-mini',
       max_tokens: maxTokensFor(character),
       ...STYLE_PARAMS,
       response_format: { type: 'json_object' },
@@ -213,7 +213,7 @@ async function generateOpeningPair({ memory, stance }) {
       'Authorization': `Bearer ${OPENAI_KEY}`,
     },
     body: JSON.stringify({
-      model: 'gpt-4o-mini',
+      model: 'gpt-5.4-mini',
       max_tokens: 700,
       ...STYLE_PARAMS,
       response_format: { type: 'json_object' },
@@ -243,7 +243,7 @@ async function generateReplyStream(systemPrompt, messages, character = null) {
       'Authorization': `Bearer ${OPENAI_KEY}`,
     },
     body: JSON.stringify({
-      model: 'gpt-4o-mini',
+      model: 'gpt-5.4-mini',
       max_tokens: maxTokensFor(character),
       ...STYLE_PARAMS,
       stream: true,

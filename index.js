@@ -131,7 +131,7 @@ app.post('/chat-opening', llmLimiter, async (req, res) => {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${OPENAI_KEY}` },
       body: JSON.stringify({
-        model: 'gpt-4o-mini',
+        model: 'gpt-5.4-mini',
         max_tokens: 200,
         response_format: { type: 'json_object' },
         messages: [
@@ -186,7 +186,7 @@ async function decideResponders(messages, primaryChar, secondaryChar, stance) {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${OPENAI_KEY}` },
       body: JSON.stringify({
-        model: 'gpt-4o-mini',
+        model: 'gpt-5.4-mini',
         max_tokens: 50,
         messages: [
           {
@@ -467,7 +467,7 @@ ${JSON.stringify(messages || [], null, 2)}`;
         'Authorization': `Bearer ${OPENAI_KEY}`,
       },
       body: JSON.stringify({
-        model: 'gpt-4o-mini',
+        model: 'gpt-5.4-mini',
         max_tokens: 500,
         temperature: 0.3,
         response_format: { type: 'json_object' },

@@ -44,7 +44,7 @@ async function callOpenAI(newsContext) {
       'Authorization': `Bearer ${OPENAI_KEY}`,
     },
     body: JSON.stringify({
-      model: 'gpt-4o-mini',
+      model: 'gpt-5.4-mini',
       max_tokens: 300,
       temperature: 0.7,
       response_format: { type: 'json_object' },

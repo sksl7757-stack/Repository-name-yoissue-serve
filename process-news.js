@@ -407,7 +407,7 @@ ${candidates.map(c => `[${c.index}] ${c.title} (${c.source})\n    ${c.summary}`)
       'Authorization': `Bearer ${OPENAI_KEY}`,
     },
     body: JSON.stringify({
-      model: 'gpt-4o-mini',
+      model: 'gpt-5.4-mini',
       max_tokens: 200,
       temperature: 0,
       response_format: { type: 'json_object' },
