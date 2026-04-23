@@ -33,11 +33,10 @@ function getPersona(character) {
 }
 
 // 해당 모드에 맞는 base prompt 한 필드를 반환. persona 에 없으면 빈 문자열.
-function basePromptFor(persona, { isMourning, primaryCharName, isOpinion }) {
+function basePromptFor(persona, { isMourning, isOpinion }) {
   if (!persona) return '';
-  if (isMourning)     return persona.mourningPrompt || persona.corePersona || '';
-  if (primaryCharName) return persona.corePersona  || '';
-  if (isOpinion)      return persona.opinionPrompt || '';
+  if (isMourning) return persona.mourningPrompt || persona.corePersona || '';
+  if (isOpinion)  return persona.opinionPrompt || '';
   return persona.conversePrompt || '';
 }
 

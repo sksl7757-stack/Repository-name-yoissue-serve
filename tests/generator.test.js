@@ -1,4 +1,4 @@
-// buildSystemPrompt 출력 snapshot 잠금.
+// buildSystemPrompt / buildOpeningPairPrompt 출력 snapshot 잠금.
 // 리팩터링 전후 비교로 회귀 방지.
 //
 // getTodayNews 는 네트워크 호출이라 mock — 픽스처 고정으로 snapshot 안정.
@@ -14,7 +14,7 @@ jest.mock('../supabase', () => ({
   }),
 }));
 
-const { buildSystemPrompt } = require('../generator');
+const { buildSystemPrompt, buildOpeningPairPrompt } = require('../generator');
 
 const NEWS_OPINION_MESSAGES = [
   { role: 'user', content: '이번 결정 어떻게 생각해?' },
@@ -22,6 +22,12 @@ const NEWS_OPINION_MESSAGES = [
 const NEWS_CONVERSE_MESSAGES = [
   { role: 'user', content: '이 뉴스 봤어.' },
 ];
+
+const SAMPLE_STANCE = {
+  axis: '단기 생활 체감 vs 장기 구조 변화',
+  hana_side: '단기 생활 체감',
+  junhyuk_side: '장기 구조 변화',
+};
 
 describe('buildSystemPrompt — MOURNING 모드', () => {
   test('하나 + 메모리 없음', async () => {
@@ -43,162 +49,139 @@ describe('buildSystemPrompt — MOURNING 모드', () => {
   });
 });
 
-describe('buildSystemPrompt — SECONDARY 모드', () => {
-  test('하나가 준혁(negative) 에 반박, 스스로 positive', async () => {
-    const out = await buildSystemPrompt('하나', null, {
-      phase:            'INIT',
-      primaryCharName:  '준혁',
-      primaryComment:   '이거 리스크 커 보이는데.',
-      primaryEmotion:   'negative',
-      characterEmotion: 'positive',
-      messages:         NEWS_CONVERSE_MESSAGES,
-    });
-    expect(out).toMatchSnapshot();
-  });
-
-  test('준혁이 하나(positive) 에 반박, 스스로 negative', async () => {
-    const out = await buildSystemPrompt('준혁', null, {
-      phase:            'INIT',
-      primaryCharName:  '하나',
-      primaryComment:   '나는 기회라고 봐!',
-      primaryEmotion:   'positive',
-      characterEmotion: 'negative',
-      messages:         NEWS_CONVERSE_MESSAGES,
-    });
-    expect(out).toMatchSnapshot();
-  });
-});
-
-describe('buildSystemPrompt — OPINION 모드', () => {
-  test('하나 + INIT + positive stance', async () => {
-    const out = await buildSystemPrompt('하나', null, {
-      phase:            'INIT',
-      characterEmotion: 'positive',
-      messages:         NEWS_OPINION_MESSAGES,
-    });
-    expect(out).toMatchSnapshot();
-  });
-});
-
-describe('buildSystemPrompt — CONVERSE 모드', () => {
-  test('준혁 + CHAT + negative stance', async () => {
-    const out = await buildSystemPrompt('준혁', null, {
-      phase:            'CHAT',
-      characterEmotion: 'negative',
-      messages:         NEWS_CONVERSE_MESSAGES,
-    });
-    expect(out).toMatchSnapshot();
-  });
-
-  test('하나 + isDeepen (listen 버튼 심화)', async () => {
-    const out = await buildSystemPrompt('하나', null, {
-      phase:            'CHAT',
-      isDeepen:         true,
-      characterEmotion: 'positive',
-      messages:         NEWS_CONVERSE_MESSAGES,
-    });
-    expect(out).toMatchSnapshot();
-  });
-
-  test('하나 + stance 없음 (neutral → 시점 고정 규칙 제외)', async () => {
+describe('buildSystemPrompt — CONVERSE / OPINION + stance 주입', () => {
+  test('하나 + CHAT + stance 있음', async () => {
     const out = await buildSystemPrompt('하나', null, {
       phase:    'CHAT',
       messages: NEWS_CONVERSE_MESSAGES,
+      stance:   SAMPLE_STANCE,
+    });
+    expect(out).toMatchSnapshot();
+  });
+
+  test('준혁 + INIT + stance 있음', async () => {
+    const out = await buildSystemPrompt('준혁', null, {
+      phase:    'INIT',
+      messages: NEWS_CONVERSE_MESSAGES,
+      stance:   SAMPLE_STANCE,
+    });
+    expect(out).toMatchSnapshot();
+  });
+
+  test('하나 + OPINION 모드 (유저가 의견 요청)', async () => {
+    const out = await buildSystemPrompt('하나', null, {
+      phase:    'INIT',
+      messages: NEWS_OPINION_MESSAGES,
+      stance:   SAMPLE_STANCE,
+    });
+    expect(out).toMatchSnapshot();
+  });
+
+  test('하나 + stance 없음 (fallback, 규칙 블록 스킵)', async () => {
+    const out = await buildSystemPrompt('하나', null, {
+      phase:    'CHAT',
+      messages: NEWS_CONVERSE_MESSAGES,
+    });
+    expect(out).toMatchSnapshot();
+  });
+
+  test('하나 + isDeepen (listen 버튼)', async () => {
+    const out = await buildSystemPrompt('하나', null, {
+      phase:    'CHAT',
+      messages: NEWS_CONVERSE_MESSAGES,
+      stance:   SAMPLE_STANCE,
+      isDeepen: true,
+    });
+    expect(out).toMatchSnapshot();
+  });
+});
+
+describe('buildOpeningPairPrompt — 오프닝 페어 (두 캐릭터 동시)', () => {
+  test('stance 주입 + 기본 뉴스', async () => {
+    const out = await buildOpeningPairPrompt({ memory: null, stance: SAMPLE_STANCE });
+    expect(out).toMatchSnapshot();
+  });
+
+  test('stance + 메모리 있음', async () => {
+    const out = await buildOpeningPairPrompt({
+      memory: '유저는 경제 뉴스 관심',
+      stance: SAMPLE_STANCE,
     });
     expect(out).toMatchSnapshot();
   });
 });
 
 describe('buildSystemPrompt — 구조적 불변식 (리팩터링 가드)', () => {
-  test('MOURNING 은 secondaryFormat/primaryDirection/hardRule 스킵', async () => {
+  test('MOURNING 은 primaryDirection/hardRule/stance 스킵', async () => {
     const out = await buildSystemPrompt('하나', null, {
       isMourning: true,
       phase:      'INIT',
       messages:   NEWS_CONVERSE_MESSAGES,
+      stance:     SAMPLE_STANCE,  // 추모 땐 stance 있어도 무시
     });
-    expect(out).not.toContain('【출력 형식 강제 — 최우선 규칙】');
     expect(out).not.toContain('【응답 원칙 — 최우선 규칙】');
     expect(out).not.toContain('【출력 규칙】');
-  });
-
-  test('SECONDARY 는 primaryComment + newsDetailBlock 둘 다 포함 (주제 앵커 유지)', async () => {
-    const out = await buildSystemPrompt('하나', null, {
-      primaryCharName: '준혁',
-      primaryComment:  '리스크 있어.',
-      primaryEmotion:  'negative',
-      phase:           'INIT',
-      messages:        NEWS_CONVERSE_MESSAGES,
-    });
-    expect(out).toContain('"리스크 있어."');
-    expect(out).toContain('<<<NEWS_START>>>');
-    expect(out).toContain('【뉴스 재설명 금지 — 절대 규칙】');
+    expect(out).not.toContain('대립 구도');
+    expect(out).not.toContain(SAMPLE_STANCE.axis);
   });
 
   test('CONVERSE 는 newsDetailBlock + primaryDirection 포함', async () => {
     const out = await buildSystemPrompt('하나', null, {
       phase:    'CHAT',
       messages: NEWS_CONVERSE_MESSAGES,
+      stance:   SAMPLE_STANCE,
     });
     expect(out).toContain('<<<NEWS_START>>>');
     expect(out).toContain('【응답 원칙 — 최우선 규칙】');
   });
 
-  test('stance emotion 시점 고정 규칙은 positive/negative 에만 주입', async () => {
+  test('stance 주입 블록은 stance 있을 때만', async () => {
     const withStance = await buildSystemPrompt('하나', null, {
-      phase:            'CHAT',
-      characterEmotion: 'positive',
-      messages:         NEWS_CONVERSE_MESSAGES,
+      phase:    'CHAT',
+      messages: NEWS_CONVERSE_MESSAGES,
+      stance:   SAMPLE_STANCE,
     });
     const withoutStance = await buildSystemPrompt('하나', null, {
-      phase:            'CHAT',
-      characterEmotion: null,
-      messages:         NEWS_CONVERSE_MESSAGES,
+      phase:    'CHAT',
+      messages: NEWS_CONVERSE_MESSAGES,
     });
-    expect(withStance).toContain('시점 고정');
-    expect(withoutStance).not.toContain('시점 고정');
+    expect(withStance).toContain('대립 구도');
+    expect(withStance).toContain(SAMPLE_STANCE.axis);
+    expect(withoutStance).not.toContain('대립 구도');
   });
 
-  test('sessionStance 는 캐릭터 × emotion 조합으로 분기', async () => {
-    const hanaPos = await buildSystemPrompt('하나', null, {
-      phase: 'CHAT', characterEmotion: 'positive', messages: NEWS_CONVERSE_MESSAGES,
+  test('isDeepen 은 심화 블록 주입, 추모에선 스킵', async () => {
+    const withDeepen = await buildSystemPrompt('하나', null, {
+      phase:    'CHAT',
+      messages: NEWS_CONVERSE_MESSAGES,
+      stance:   SAMPLE_STANCE,
+      isDeepen: true,
     });
-    const junPos = await buildSystemPrompt('준혁', null, {
-      phase: 'CHAT', characterEmotion: 'positive', messages: NEWS_CONVERSE_MESSAGES,
+    const mourningDeepen = await buildSystemPrompt('하나', null, {
+      phase:      'INIT',
+      messages:   NEWS_CONVERSE_MESSAGES,
+      isMourning: true,
+      isDeepen:   true,
     });
-    const hanaNeg = await buildSystemPrompt('하나', null, {
-      phase: 'CHAT', characterEmotion: 'negative', messages: NEWS_CONVERSE_MESSAGES,
-    });
-    const junNeg = await buildSystemPrompt('준혁', null, {
-      phase: 'CHAT', characterEmotion: 'negative', messages: NEWS_CONVERSE_MESSAGES,
-    });
-    // 경제 카테고리 → positive:'낙관' / negative:'회의'
-    expect(hanaPos).toContain('감성적 낙관');
-    expect(junPos).toContain('냉철한 낙관');
-    expect(hanaNeg).toContain('감성적 회의');
-    expect(junNeg).toContain('냉철한 회의');
+    expect(withDeepen).toContain('심화 발언');
+    expect(mourningDeepen).not.toContain('심화 발언');
   });
 
   test('정치 평가 금지 규칙은 MOURNING 제외 전 모드에 주입', async () => {
     const converse = await buildSystemPrompt('하나', null, {
-      phase: 'CHAT', characterEmotion: 'positive', messages: NEWS_CONVERSE_MESSAGES,
-    });
-    const secondary = await buildSystemPrompt('준혁', null, {
-      phase: 'INIT',
-      primaryCharName: '하나', primaryComment: '기대돼', primaryEmotion: 'positive',
-      characterEmotion: 'negative', messages: NEWS_CONVERSE_MESSAGES,
+      phase: 'CHAT', stance: SAMPLE_STANCE, messages: NEWS_CONVERSE_MESSAGES,
     });
     const mourning = await buildSystemPrompt('하나', null, {
       isMourning: true, phase: 'INIT', messages: NEWS_CONVERSE_MESSAGES,
     });
     expect(converse).toContain('정치 평가 금지');
-    expect(secondary).toContain('정치 평가 금지');
     expect(mourning).not.toContain('정치 평가 금지');
   });
 
   test('카테고리 프레임은 news.category 에 따라 분기 (MOURNING 제외)', async () => {
     // 픽스처 category='경제' → '내 지갑·소비·일자리' 프레임
     const converse = await buildSystemPrompt('하나', null, {
-      phase: 'CHAT', characterEmotion: 'positive', messages: NEWS_CONVERSE_MESSAGES,
+      phase: 'CHAT', stance: SAMPLE_STANCE, messages: NEWS_CONVERSE_MESSAGES,
     });
     expect(converse).toContain('카테고리 프레임');
     expect(converse).toContain('"경제"');
@@ -210,5 +193,37 @@ describe('buildSystemPrompt — 구조적 불변식 (리팩터링 가드)', () =
       phase: 'CHAT', messages: NEWS_CONVERSE_MESSAGES,
     });
     expect(out).toContain('분류: 경제');
+  });
+
+  test('뉴스 요약·설명 금지 규칙 주입 (MOURNING 제외)', async () => {
+    const converse = await buildSystemPrompt('하나', null, {
+      phase: 'CHAT', stance: SAMPLE_STANCE, messages: NEWS_CONVERSE_MESSAGES,
+    });
+    const mourning = await buildSystemPrompt('하나', null, {
+      isMourning: true, phase: 'INIT', messages: NEWS_CONVERSE_MESSAGES,
+    });
+    expect(converse).toContain('뉴스 요약·설명 금지');
+    expect(mourning).not.toContain('뉴스 요약·설명 금지');
+  });
+});
+
+describe('buildOpeningPairPrompt — 구조적 불변식', () => {
+  test('두 캐릭터 페르소나 모두 포함 + stance 주입 + JSON 형식 지시', async () => {
+    const out = await buildOpeningPairPrompt({ memory: null, stance: SAMPLE_STANCE });
+    expect(out).toContain('하나 페르소나');
+    expect(out).toContain('준혁 페르소나');
+    expect(out).toContain(SAMPLE_STANCE.axis);
+    expect(out).toContain(SAMPLE_STANCE.hana_side);
+    expect(out).toContain(SAMPLE_STANCE.junhyuk_side);
+    expect(out).toContain('"hana"');
+    expect(out).toContain('"junhyuk"');
+    expect(out).toContain('대립 구도 설정 원칙');
+  });
+
+  test('newsDetailBlock + 카테고리 프레임 포함', async () => {
+    const out = await buildOpeningPairPrompt({ memory: null, stance: SAMPLE_STANCE });
+    expect(out).toContain('<<<NEWS_START>>>');
+    expect(out).toContain('분류: 경제');
+    expect(out).toContain('카테고리 프레임');
   });
 });

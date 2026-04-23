@@ -7,12 +7,12 @@ const express = require('express');
 const cors = require('cors');
 
 const { getState } = require('./stateManager');
-const { generateReply, generateReplyStream, parseOpenAIStream, buildSystemPrompt } = require('./generator');
+const { generateReply, generateOpeningPair, generateReplyStream, parseOpenAIStream, buildSystemPrompt } = require('./generator');
 const { validate } = require('./validator');
 
 const { saveNews, getSavedNews } = require('./saveNews');
 const { addRecord, getRecords } = require('./records');
-const { supabase } = require('./supabase');
+const { supabase, getTodayNews } = require('./supabase');
 const { buildComfyWorkflow } = require('./comfyUtils');
 const { interpretNews }    = require('./newsInterpreter');
 const { buildImagePrompt } = require('./promptBuilder');
@@ -152,7 +152,7 @@ app.post('/chat-opening', llmLimiter, async (req, res) => {
 // ── 응답 캐릭터 결정 (GPT function calling) ──────────────────────────────────
 // returns { first: charName, second: charName | null }
 
-async function decideResponders(messages, primaryChar, secondaryChar, emotionContext) {
+async function decideResponders(messages, primaryChar, secondaryChar, stance) {
   // 첫 코멘트 (메시지 1개 = 뉴스 컨텍스트) → 항상 둘 다
   const userMsgs = messages.filter(m => m.role === 'user');
   if (userMsgs.length === 1) return { first: primaryChar, second: secondaryChar };
@@ -193,9 +193,9 @@ async function decideResponders(messages, primaryChar, secondaryChar, emotionCon
             role: 'system',
             content: `너는 대화 흐름을 보고 누가 답해야 할지 결정하는 AI야.
 
-캐릭터 시점:
-- ${primaryChar}: ${emotionContext?.primary === 'positive' ? '긍정적' : '부정적'} 시점
-- ${secondaryChar}: ${emotionContext?.secondary === 'positive' ? '긍정적' : '부정적'} 시점
+캐릭터 시점 (오늘 대립축${stance?.axis ? ' "' + stance.axis + '"' : ''}):
+- 하나 쪽: ${stance?.hana_side || '감성·공감 기반'}
+- 준혁 쪽: ${stance?.junhyuk_side || '냉철·분석 기반'}
 
 캐릭터 이름 변형 감지:
 - "${primaryChar}" 변형: 이름이 비슷하게 발음되는 표현 모두 포함
@@ -265,13 +265,12 @@ async function decideResponders(messages, primaryChar, secondaryChar, emotionCon
   return { first: primaryChar, second: null };
 }
 
-// /chat-init — 앱 시작 시 첫 코멘트용 (일반 JSON 응답)
+// /chat-init — 앱 시작 시 첫 코멘트용.
+// 일반 모드: DB stance 조회 + generateOpeningPair 1회 호출로 {hana, junhyuk} 동시 생성.
+// 추모 모드: 기존대로 primary 단독 generateReply.
 app.post('/chat-init', llmLimiter, async (req, res) => {
-  const { user_id, character, messages: rawMessages, memory, characterEmotion, secondaryChar, secondaryEmotion, isMourning = false } = req.body;
-  const messages = sanitizeMessages(rawMessages);
+  const { user_id, character, memory, isMourning = false } = req.body;
 
-  // 영구 저장 준비 — user_id 없으면 전 과정 스킵(후방 호환).
-  // /chat-init 의 messages 는 뉴스 컨텍스트(합성 user msg)라 저장하지 않음. assistant turn 만 저장.
   const conversationPromise = user_id
     ? (async () => {
         await ensureUser(user_id);
@@ -280,35 +279,46 @@ app.post('/chat-init', llmLimiter, async (req, res) => {
     : Promise.resolve(null);
 
   try {
-    const primaryRaw      = await generateReply({ character, messages, memory, phase: 'INIT', characterEmotion, isMourning });
-    const primaryValidated = validate({ reply: primaryRaw.text });
-
-    persistAssistantTurn(conversationPromise, character, primaryValidated.message);
-
-    // 추모 모드: primary 1명만 반환
+    // 추모 모드: 기존 로직 유지 — primary 단독
     if (isMourning) {
+      const primaryRaw = await generateReply({ character, messages: [], memory, phase: 'INIT', isMourning });
+      const primaryValidated = validate({ reply: primaryRaw.text });
+      persistAssistantTurn(conversationPromise, character, primaryValidated.message);
       res.json({
-        turns: [
-          { character, message: primaryValidated.message, emotion: 'neutral' },
-        ],
+        turns: [{ character, message: primaryValidated.message, emotion: 'neutral' }],
       });
       return;
     }
 
-    const secChar = secondaryChar || (character === '하나' ? '준혁' : '하나');
-    const secEmotion = characterEmotion === 'positive' ? 'negative' : 'positive';
-    const secondaryRaw      = await generateReply({ character: secChar, messages, memory, phase: 'INIT', primaryCharName: character, primaryComment: primaryValidated.message, primaryEmotion: primaryRaw.emotion, characterEmotion: secEmotion });
-    const secondaryValidated = validate({ reply: secondaryRaw.text });
+    // 일반 모드: DB stance 조회
+    const news = await getTodayNews();
+    const stance = news?.stance;
+    if (!stance || !stance.axis) {
+      return res.status(503).json({ error: 'stance 준비 중 — 크론 실행 필요' });
+    }
 
-    persistAssistantTurn(conversationPromise, secChar, secondaryValidated.message);
+    // 1회 호출로 하나/준혁 동시 생성
+    const pair = await generateOpeningPair({ memory, stance });
+    const hanaMsg    = validate({ reply: pair.hana }).message;
+    const junhyukMsg = validate({ reply: pair.junhyuk }).message;
+
+    // 요청 character 가 대표 — 순서 결정
+    const secChar = character === '하나' ? '준혁' : '하나';
+    const primaryMsg   = character === '하나' ? hanaMsg : junhyukMsg;
+    const secondaryMsg = character === '하나' ? junhyukMsg : hanaMsg;
+
+    persistAssistantTurn(conversationPromise, character, primaryMsg);
+    persistAssistantTurn(conversationPromise, secChar, secondaryMsg);
 
     res.json({
       turns: [
-        { character, message: primaryValidated.message, emotion: primaryRaw.emotion },
-        { character: secChar, message: secondaryValidated.message, emotion: secondaryRaw.emotion },
+        { character, message: primaryMsg },
+        { character: secChar, message: secondaryMsg },
       ],
+      stance,
     });
   } catch (e) {
+    console.error('[chat-init] 오류:', e.message);
     res.status(500).json({ error: e.message });
   }
 });
@@ -321,7 +331,7 @@ app.post('/chat', llmLimiter, async (req, res) => {
 
   const sse = (event, data) => res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
 
-  const { user_id, messages: rawMessages, character, memory, characterEmotion = null, secondaryEmotion = null, secondaryChar: reqSecondaryChar = null, choiceDone = false, turnCount = 0, isMourning = false, isDeepen = false } = req.body;
+  const { user_id, messages: rawMessages, character, memory, choiceDone = false, turnCount = 0, isMourning = false, isDeepen = false, stance = null } = req.body;
   const messages = sanitizeMessages(rawMessages);
 
   // 영구 저장 준비 — user_id 없으면 스킵(후방 호환). 유저 마지막 발화를 즉시 기록해
@@ -357,38 +367,28 @@ app.post('/chat', llmLimiter, async (req, res) => {
   try {
     // ── 일반 채팅 ──────────────────────────────────────────────────────────────
     const primaryChar    = character;
-    const secondaryChar  = reqSecondaryChar || (character === '하나' ? '준혁' : '하나');
+    const secondaryChar  = (character === '하나' ? '준혁' : '하나');
     const { phase, questionAsked } = getState(messages);
 
-    console.log('[emotion-in]', 'primary=', characterEmotion, '| secondary=', secondaryEmotion);
-
-    // MOURNING 모드: 항상 primary 단독 응답, decideResponders/stance 전부 우회
-    // isDeepen (listen 버튼): 오프닝처럼 둘 다 등장 강제 — decideResponders 우회
-    let first, second, firstEmotion, secondEmotion;
+    // MOURNING 모드: primary 단독 응답.
+    // isDeepen (listen 버튼): 오프닝처럼 둘 다 등장 강제.
+    // 일반: decideResponders 가 stance 컨텍스트로 누가 답할지 결정.
+    let first, second;
     if (isMourning) {
       first = primaryChar;
       second = null;
-      firstEmotion = null;
-      secondEmotion = null;
     } else if (isDeepen) {
       first = primaryChar;
       second = secondaryChar;
-      const opposite = characterEmotion === 'positive' ? 'negative' : 'positive';
-      firstEmotion  = characterEmotion;
-      secondEmotion = opposite;
     } else {
-      const emotionContext = { primary: characterEmotion, secondary: secondaryEmotion };
-      const decided = await decideResponders(messages, primaryChar, secondaryChar, emotionContext);
+      const decided = await decideResponders(messages, primaryChar, secondaryChar, stance);
       first = decided.first;
       second = decided.second;
-      const opposite = characterEmotion === 'positive' ? 'negative' : 'positive';
-      firstEmotion  = first  === primaryChar ? characterEmotion : opposite;
-      secondEmotion = second === primaryChar ? characterEmotion : opposite;
     }
 
     // 첫 번째 캐릭터 스트리밍
-    console.log('[stance-in]', first, '→', firstEmotion, '| isMourning:', isMourning);
-    const firstSystemPrompt = (await buildSystemPrompt(first, memory, { phase, primaryCharName: null, primaryComment: null, primaryEmotion: null, messages, characterEmotion: firstEmotion, isMourning, isDeepen })) + conversationHints;
+    console.log('[chat] first:', first, '| isMourning:', isMourning, '| isDeepen:', isDeepen, '| hasStance:', !!stance);
+    const firstSystemPrompt = (await buildSystemPrompt(first, memory, { phase, messages, stance, isMourning, isDeepen })) + conversationHints;
 
     sse('turn_start', { character: first });
     let firstText = '';
@@ -401,16 +401,15 @@ app.post('/chat', llmLimiter, async (req, res) => {
     console.log('first reply:', firstValidated.message?.slice(0, 80));
     const OFF_TOPIC_PATTERNS = ['오늘 뉴스 얘기', '오늘 주제 아님', '그건 내가 답하기', '뉴스 관련 얘기만', '다른 얘기는'];
     const firstOffTopic = OFF_TOPIC_PATTERNS.some(p => firstValidated.message?.includes(p));
-    sse('turn_end', { character: first, message: firstValidated.message, emotion: firstEmotion || 'neutral', offTopic: firstOffTopic });
+    sse('turn_end', { character: first, message: firstValidated.message, emotion: 'neutral', offTopic: firstOffTopic });
     persistAssistantTurn(conversationPromise, first, firstValidated.message);
 
     // 두 번째 캐릭터 스트리밍
     if (second) {
-      console.log('[emotion]', 'primary:', characterEmotion, '| secondary:', secondaryEmotion, '| secondEmotion:', secondEmotion);
       await new Promise(r => setTimeout(r, 600));
-      console.log('[second-char]', second, '| primaryComment:', firstValidated.message?.slice(0, 30));
+      console.log('[chat] second:', second);
 
-      const secondSystemPrompt = (await buildSystemPrompt(second, memory, { phase, primaryCharName: first, primaryComment: firstValidated.message, primaryEmotion: firstEmotion, messages, characterEmotion: secondEmotion, isDeepen })) + conversationHints;
+      const secondSystemPrompt = (await buildSystemPrompt(second, memory, { phase, messages, stance, isDeepen })) + conversationHints;
 
       sse('turn_start', { character: second });
       let secondText = '';
@@ -421,7 +420,7 @@ app.post('/chat', llmLimiter, async (req, res) => {
 
       const secondValidated = validate({ reply: secondText });
       console.log('second reply:', secondValidated.message?.slice(0, 80));
-      sse('turn_end', { character: second, message: secondValidated.message, emotion: secondEmotion || 'neutral' });
+      sse('turn_end', { character: second, message: secondValidated.message, emotion: 'neutral' });
       persistAssistantTurn(conversationPromise, second, secondValidated.message);
     }
 

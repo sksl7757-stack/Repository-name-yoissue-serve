@@ -12,15 +12,14 @@ const {
   characterLockRule,
   primaryDirectionRule,
   JSON_FORMAT_RULE,
+  stanceContractRule,
   stateRuleFor,
   sessionStanceRuleFor,
-  secondaryFormatRuleFor,
-  newsBlockRuleFor,
-  secondaryContextBlockFor,
   memoryBlockFor,
   newsDetailBlockFor,
   categoryFrameRuleFor,
   politicalSafetyRuleFor,
+  newsPersonalRuleFor,
 } = require('./prompts/blocks');
 
 // ─── 모드 판정 ─────────────────────────────────────────────────────────────
@@ -38,31 +37,24 @@ function isOpinionRequest(messages) {
   return OPINION_PATTERNS.some(p => p.test(text));
 }
 
-// ─── 시스템 프롬프트 조립 ─────────────────────────────────────────────────
+// ─── 시스템 프롬프트 조립 (/chat 자유 채팅용 — 캐릭터 1명) ────────────────
 
 async function buildSystemPrompt(character, memory, {
-  phase                = 'INIT',
-  primaryCharName      = null,
-  primaryComment       = null,
-  primaryEmotion       = null,
-  messages             = [],
-  characterEmotion     = null,
-  isMourning           = false,
-  isDeepen             = false,
+  phase            = 'INIT',
+  messages         = [],
+  stance           = null,
+  isMourning       = false,
+  isDeepen         = false,
 } = {}) {
-  console.log('[buildSystemPrompt] primaryCharName:', primaryCharName, '| has primaryComment:', !!primaryComment, '| isMourning:', isMourning);
-
-  const isSecondary = !!(primaryCharName && primaryComment);
-  const isOpinion   = !isSecondary && !isMourning && isOpinionRequest(messages);
-  const mode = isMourning ? 'MOURNING' : (primaryCharName ? 'SECONDARY' : (isOpinion ? 'OPINION' : 'CONVERSE'));
-  console.log('[mode]', mode, '| character:', character);
+  const isOpinion = !isMourning && isOpinionRequest(messages);
+  const mode = isMourning ? 'MOURNING' : (isOpinion ? 'OPINION' : 'CONVERSE');
+  console.log('[mode]', mode, '| character:', character, '| hasStance:', !!stance);
 
   // 페르소나 base prompt (모드별 필드 선택)
   const persona = getPersona(character);
-  const activeBasePrompt = basePromptFor(persona, { isMourning, primaryCharName, isOpinion });
+  const activeBasePrompt = basePromptFor(persona, { isMourning, isOpinion });
 
-  // SECONDARY 도 뉴스 detail 을 받아야 주제 앵커가 유지됨 (재설명 금지는 newsBlockRule 에서 처리)
-  // category 는 CATEGORIES(process-news.js) 의 한글 이름 그대로 저장됨 — 정치/경제/환경/건강/IT/문화/사회
+  // 뉴스 detail + 카테고리
   let newsDetailBlock = '';
   let newsCategory = null;
   try {
@@ -71,45 +63,30 @@ async function buildSystemPrompt(character, memory, {
     newsCategory = news?.category ?? null;
   } catch {}
 
-  // 조건부 블록 — 빌더 내부에서 가드하므로 여기서는 그냥 호출
-  const sessionStanceRule     = sessionStanceRuleFor(characterEmotion, isMourning, character, newsCategory);
-  const politicalSafetyRule   = politicalSafetyRuleFor(isMourning);
-  const categoryFrameRule     = categoryFrameRuleFor(newsCategory, isMourning);
-  const secondaryFormatRule   = secondaryFormatRuleFor(primaryCharName, primaryComment, primaryEmotion);
-  const secondaryContextBlock = secondaryContextBlockFor(primaryCharName, primaryComment);
-  const newsBlockRule         = newsBlockRuleFor(primaryCharName, primaryComment);
-  const memoryBlock           = memoryBlockFor(memory);
+  // 조건부 블록
+  const sessionStanceRule   = sessionStanceRuleFor(stance, isMourning);
+  const politicalSafetyRule = politicalSafetyRuleFor(isMourning);
+  const categoryFrameRule   = categoryFrameRuleFor(newsCategory, isMourning);
+  const memoryBlock         = memoryBlockFor(memory);
+  const newsPersonalRule    = newsPersonalRuleFor(isMourning);
 
-  // SECONDARY / MOURNING 에서는 대다수 일반 규칙 스킵
-  const skipGeneral = isSecondary || isMourning;
+  // MOURNING 에서는 대다수 일반 규칙 스킵 (추모 톤 유지)
+  const skipGeneral = isMourning;
   const activeHardRule         = skipGeneral ? '' : hardRule;
   const activeCharacterLock    = skipGeneral ? '' : characterLockRule;
   const activeCommonPrinciples = skipGeneral ? '' : commonPrinciples;
   const activeStateRule        = skipGeneral ? '' : stateRuleFor(phase);
-  // 심화 블록은 MOURNING 에서는 스킵, SECONDARY 에서도 주입 (둘 다 심화 참여)
   const activeDeepenRule       = (isDeepen && !isMourning) ? deepenRule : '';
+  const activePrimaryDirection = isMourning ? '' : primaryDirectionRule;
 
-  // primaryDirectionRule 은 primary 모드 전용 상수 — SECONDARY 에서는 빈 문자열
-  const activePrimaryDirection = (isMourning || primaryCharName) ? '' : primaryDirectionRule;
-  const activeSecondaryFormat  = isMourning ? '' : secondaryFormatRule;
-  const activeSecondaryContext = isMourning ? '' : secondaryContextBlock;
-
-  console.log('[sessionStanceRule]', characterEmotion, '| length:', sessionStanceRule.length);
-  if (!primaryCharName && characterEmotion) {
-    console.log(`[stance] ${character} → ${characterEmotion}`);
-  }
-
-  // 정치 평가 금지 + 카테고리 프레임은 SECONDARY 에서도 적용되어야 하므로
-  // skipGeneral 가드가 아니라 isMourning 가드(빌더 내부)로만 제한.
   return [
     sessionStanceRule,
     politicalSafetyRule,
     categoryFrameRule,
     activePrimaryDirection,
-    activeSecondaryFormat,
     activeBasePrompt,
     newsDetailBlock,
-    newsBlockRule,
+    newsPersonalRule,
     memoryBlock,
     activeCommonPrinciples,
     activeHardRule,
@@ -117,7 +94,54 @@ async function buildSystemPrompt(character, memory, {
     activeStateRule,
     activeDeepenRule,
     activeCharacterLock,
-    activeSecondaryContext,
+  ].filter(Boolean).join('');
+}
+
+// ─── 오프닝 페어 프롬프트 (/chat-init 일반 모드 — 두 캐릭터 동시) ──────────
+// DB 에 저장된 stance 를 프롬프트에 주입. 1회 LLM 호출로 {hana, junhyuk} 생성.
+
+async function buildOpeningPairPrompt({ memory, stance }) {
+  const hanaPersona    = getPersona('하나');
+  const junhyukPersona = getPersona('준혁');
+  const hanaBase    = hanaPersona?.conversePrompt || '';
+  const junhyukBase = junhyukPersona?.conversePrompt || '';
+
+  let newsDetailBlock = '';
+  let newsCategory = null;
+  try {
+    const news = await getTodayNews();
+    newsDetailBlock = newsDetailBlockFor(news);
+    newsCategory = news?.category ?? null;
+  } catch {}
+
+  const politicalSafetyRule = politicalSafetyRuleFor(false);
+  const categoryFrameRule   = categoryFrameRuleFor(newsCategory, false);
+  const memoryBlock         = memoryBlockFor(memory);
+  const newsPersonalRule    = newsPersonalRuleFor(false);
+
+  const hanaSide    = stance?.hana_side    || '';
+  const junhyukSide = stance?.junhyuk_side || '';
+  const axis        = stance?.axis         || '';
+
+  const stanceBlock = `\n\n【이번 대화의 대립 구도 — 고정】\n축: "${axis}"\n- 하나 쪽: "${hanaSide}"\n- 준혁 쪽: "${junhyukSide}"\n\n각 캐릭터는 자기 쪽 시점으로만 끝까지 말한다. 상대 쪽 관점 섞기·전환 표현·중립 마무리 전부 금지.`;
+
+  const personaBlock = `\n\n【하나 페르소나 — "hana" 필드 생성에 적용】\n${hanaBase}\n\n【준혁 페르소나 — "junhyuk" 필드 생성에 적용】\n${junhyukBase}`;
+
+  const jsonFormat = `\n\n【출력 형식 — JSON 고정, 다른 텍스트 없이】\n{\n  "hana":    "하나의 발언 (하나 페르소나, 2~3문장, 하나 쪽 시점 고수)",\n  "junhyuk": "준혁의 발언 (준혁 페르소나, 1~2문장, 준혁 쪽 시점 고수)"\n}\n\n* 두 발언은 서로 대립하되, 각자 자기 쪽만 말할 것\n* 뉴스 요약·중계 금지. 첫 문장부터 자기 관점\n* 한 캐릭터가 양쪽 관점 섞지 말 것`;
+
+  return [
+    stanceContractRule,
+    stanceBlock,
+    politicalSafetyRule,
+    categoryFrameRule,
+    personaBlock,
+    newsDetailBlock,
+    newsPersonalRule,
+    memoryBlock,
+    commonPrinciples,
+    hardRule,
+    noQuestionRule,
+    jsonFormat,
   ].filter(Boolean).join('');
 }
 
@@ -125,23 +149,20 @@ async function buildSystemPrompt(character, memory, {
 
 const VALID_EMOTIONS = new Set(['positive', 'negative', 'neutral']);
 
-// 캐릭터별 max_tokens — 하나는 감성 디테일용으로 길게, 준혁은 단호함 강조로 짧게
 const MAX_TOKENS_BY_CHAR = { '하나': 400, '준혁': 250 };
 function maxTokensFor(character) {
   return MAX_TOKENS_BY_CHAR[character] ?? 350;
 }
 
-// 말투 일관성 강화용 공통 파라미터
 const STYLE_PARAMS = {
   temperature: 0.9,
   frequency_penalty: 0.3,
   presence_penalty: 0.2,
 };
 
-async function generateReply({ character, messages, memory, phase = 'INIT', primaryCharName = null, primaryComment = null, primaryEmotion = null, characterEmotion = null, isMourning = false }) {
+async function generateReply({ character, messages, memory, phase = 'INIT', stance = null, isMourning = false }) {
   const OPENAI_KEY = process.env.OPENAI_API_KEY?.replace(/['"]/g, '');
-  // MOURNING 모드는 emotion 필드를 neutral 고정으로 받아도 상관없음 (프론트에서 항상 worry 이미지 사용)
-  const systemPrompt = await buildSystemPrompt(character, memory, { phase, primaryCharName, primaryComment, primaryEmotion, messages, characterEmotion, isMourning }) + JSON_FORMAT_RULE;
+  const systemPrompt = await buildSystemPrompt(character, memory, { phase, messages, stance, isMourning }) + JSON_FORMAT_RULE;
 
   const response = await fetch('https://api.openai.com/v1/chat/completions', {
     method: 'POST',
@@ -167,23 +188,50 @@ async function generateReply({ character, messages, memory, phase = 'INIT', prim
   const raw = data?.choices?.[0]?.message?.content || '{}';
 
   let text    = '응답없음';
-  let emotion = 'negative';
+  let emotion = 'neutral';
 
   try {
     const parsed = JSON.parse(raw);
     text    = (parsed.text    || '').trim() || raw.trim();
-    emotion = VALID_EMOTIONS.has(parsed.emotion) ? parsed.emotion : 'negative';
+    emotion = VALID_EMOTIONS.has(parsed.emotion) ? parsed.emotion : 'neutral';
   } catch {
-    // 파싱 실패 시 원문 그대로 사용, emotion 은 기본값 유지
     text = raw.trim();
   }
 
-  // secondary 가 neutral 을 반환했을 경우 primary 반대로 강제
-  if (primaryCharName && emotion !== 'positive' && emotion !== 'negative') {
-    emotion = primaryEmotion === 'positive' ? 'negative' : 'positive';
-  }
-
   return { text, emotion };
+}
+
+// 오프닝 페어 생성 — /chat-init 일반 모드. 1회 OpenAI 호출 → {hana, junhyuk}.
+async function generateOpeningPair({ memory, stance }) {
+  const OPENAI_KEY = process.env.OPENAI_API_KEY?.replace(/['"]/g, '');
+  const systemPrompt = await buildOpeningPairPrompt({ memory, stance });
+
+  const response = await fetch('https://api.openai.com/v1/chat/completions', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${OPENAI_KEY}`,
+    },
+    body: JSON.stringify({
+      model: 'gpt-4o-mini',
+      max_tokens: 700,
+      ...STYLE_PARAMS,
+      response_format: { type: 'json_object' },
+      messages: [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: '오늘 뉴스에 대해 하나와 준혁이 각자 자기 쪽 시점으로 발언해줘. JSON 으로만.' },
+      ],
+    }),
+  });
+
+  const data = await response.json();
+  if (data.error) throw new Error(data.error.message);
+  const raw = data?.choices?.[0]?.message?.content || '{}';
+  const parsed = JSON.parse(raw);
+  return {
+    hana:    String(parsed.hana    || '').trim(),
+    junhyuk: String(parsed.junhyuk || '').trim(),
+  };
 }
 
 async function generateReplyStream(systemPrompt, messages, character = null) {
@@ -229,4 +277,4 @@ async function* parseOpenAIStream(body) {
   }
 }
 
-module.exports = { generateReply, generateReplyStream, parseOpenAIStream, buildSystemPrompt, isOpinionRequest };
+module.exports = { generateReply, generateOpeningPair, generateReplyStream, parseOpenAIStream, buildSystemPrompt, buildOpeningPairPrompt, isOpinionRequest };
