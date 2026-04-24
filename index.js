@@ -26,6 +26,8 @@ const {
 } = require('./services/persist');
 const { detectCrisis, CRISIS_MESSAGE } = require('./services/crisisFilter');
 const { moderateInput, MODERATION_FALLBACK_MESSAGE } = require('./services/inputModeration');
+const { guardOutput, OUTPUT_FALLBACK_MESSAGE } = require('./services/outputGuard');
+const { deleteUserData } = require('./deleteUserData');
 
 const app = express();
 app.use(cors());
@@ -75,6 +77,8 @@ const llmLimiter   = createLimiter(30, 60 * 1000);
 const imageLimiter = createLimiter(5, 60 * 1000);
 // 토큰 등록: 분당 5회 (푸시 토큰 폴루션 방어 — 인스톨 당 1회성 작업)
 const registerLimiter = createLimiter(5, 60 * 1000);
+// 데이터 삭제: 분당 3회 (실수/어뷰즈 방어. 정상 사용은 평생 1~2회)
+const deleteLimiter = createLimiter(3, 60 * 1000);
 
 // ── 메시지 sanitizer: 클라이언트 주입 방어 ────────────────────────────────────
 // 외부 입력에서 role=system 등 비허용 롤을 차단하고 content를 문자열로 정규화.
@@ -99,11 +103,16 @@ async function readTokens() {
   return (data || []).map(r => r.token);
 }
 
-async function upsertToken(token) {
-  const { error } = await supabase
+async function upsertToken(token, userId = null) {
+  const row = { token };
+  if (userId) row.user_id = userId;
+  console.log('[register-token] upsert row keys=', Object.keys(row), 'user_id=', userId);
+  const { error, data, status } = await supabase
     .from('push_tokens')
-    .upsert({ token }, { onConflict: 'token' });
-  if (error) console.error('push_tokens upsert 오류:', error.message);
+    .upsert(row, { onConflict: 'token' })
+    .select();
+  if (error) console.error('[register-token] upsert 오류:', error.message, 'status=', status);
+  else console.log('[register-token] upsert ok rows=', data?.length ?? 0);
 }
 
 const OPENING_MESSAGES = {
@@ -288,9 +297,14 @@ app.post('/chat-init', llmLimiter, async (req, res) => {
     if (isMourning) {
       const primaryRaw = await generateReply({ character, messages: [], memory, phase: 'INIT', isMourning });
       const primaryValidated = validate({ reply: primaryRaw.text });
-      persistAssistantTurn(conversationPromise, character, primaryValidated.message);
+      const g = await guardOutput(primaryValidated.message);
+      const finalMsg = g.blocked ? OUTPUT_FALLBACK_MESSAGE : primaryValidated.message;
+      if (g.blocked) {
+        console.log(`[output/block] user=${user_id || 'anon'} char=${character} textLen=${primaryValidated.message.length} category=${g.category} source=${g.source}`);
+      }
+      persistAssistantTurn(conversationPromise, character, finalMsg);
       res.json({
-        turns: [{ character, message: primaryValidated.message, emotion: 'neutral' }],
+        turns: [{ character, message: finalMsg, emotion: 'neutral', ...(g.blocked ? { type: 'output_block' } : {}) }],
       });
       return;
     }
@@ -304,21 +318,33 @@ app.post('/chat-init', llmLimiter, async (req, res) => {
 
     // 1회 호출로 하나/준혁 동시 생성
     const pair = await generateOpeningPair({ memory, stance });
-    const hanaMsg    = validate({ reply: pair.hana }).message;
-    const junhyukMsg = validate({ reply: pair.junhyuk }).message;
+    const hanaMsgRaw    = validate({ reply: pair.hana }).message;
+    const junhyukMsgRaw = validate({ reply: pair.junhyuk }).message;
+
+    // 출력 가드 — 각 캐릭터 메시지 개별 검증
+    const [hanaGuard, junhyukGuard] = await Promise.all([
+      guardOutput(hanaMsgRaw),
+      guardOutput(junhyukMsgRaw),
+    ]);
+    const hanaMsg    = hanaGuard.blocked    ? OUTPUT_FALLBACK_MESSAGE : hanaMsgRaw;
+    const junhyukMsg = junhyukGuard.blocked ? OUTPUT_FALLBACK_MESSAGE : junhyukMsgRaw;
+    if (hanaGuard.blocked)    console.log(`[output/block] user=${user_id || 'anon'} char=하나 textLen=${hanaMsgRaw.length} category=${hanaGuard.category} source=${hanaGuard.source}`);
+    if (junhyukGuard.blocked) console.log(`[output/block] user=${user_id || 'anon'} char=준혁 textLen=${junhyukMsgRaw.length} category=${junhyukGuard.category} source=${junhyukGuard.source}`);
 
     // 요청 character 가 대표 — 순서 결정
     const secChar = character === '하나' ? '준혁' : '하나';
     const primaryMsg   = character === '하나' ? hanaMsg : junhyukMsg;
     const secondaryMsg = character === '하나' ? junhyukMsg : hanaMsg;
+    const primaryBlocked   = character === '하나' ? hanaGuard.blocked : junhyukGuard.blocked;
+    const secondaryBlocked = character === '하나' ? junhyukGuard.blocked : hanaGuard.blocked;
 
     persistAssistantTurn(conversationPromise, character, primaryMsg);
     persistAssistantTurn(conversationPromise, secChar, secondaryMsg);
 
     res.json({
       turns: [
-        { character, message: primaryMsg },
-        { character: secChar, message: secondaryMsg },
+        { character,          message: primaryMsg,   ...(primaryBlocked   ? { type: 'output_block' } : {}) },
+        { character: secChar, message: secondaryMsg, ...(secondaryBlocked ? { type: 'output_block' } : {}) },
       ],
       stance,
     });
@@ -483,8 +509,29 @@ app.post('/chat', llmLimiter, async (req, res) => {
     console.log('first reply:', firstValidated.message?.slice(0, 80));
     const OFF_TOPIC_PATTERNS = ['오늘 뉴스 얘기', '오늘 주제 아님', '그건 내가 답하기', '뉴스 관련 얘기만', '다른 얘기는'];
     const firstOffTopic = OFF_TOPIC_PATTERNS.some(p => firstValidated.message?.includes(p));
-    sse('turn_end', { character: first, message: firstValidated.message, emotion: 'neutral', offTopic: firstOffTopic });
-    persistAssistantTurn(conversationPromise, first, firstValidated.message);
+    // 출력 가드 — LLM이 탈옥/우회로 위험 문장을 낸 경우 최종 메시지를 fallback 으로 교체.
+    // 클라이언트는 turn_end.message 로 스트리밍 텍스트를 덮어쓰므로 표시는 교체된다.
+    const firstGuard = await guardOutput(firstValidated.message);
+    const firstFinalMessage = firstGuard.blocked ? OUTPUT_FALLBACK_MESSAGE : firstValidated.message;
+    if (firstGuard.blocked) {
+      console.log(
+        `[output/block] user=${user_id || 'anon'}`,
+        `char=${first}`,
+        `textLen=${firstValidated.message.length}`,
+        `category=${firstGuard.category}`,
+        `source=${firstGuard.source}`,
+      );
+    } else if (firstGuard.failOpen) {
+      console.error(`[output/fail-open] user=${user_id || 'anon'} char=${first} error=${firstGuard.error}`);
+    }
+    sse('turn_end', {
+      character: first,
+      message: firstFinalMessage,
+      emotion: 'neutral',
+      offTopic: firstGuard.blocked ? false : firstOffTopic,
+      ...(firstGuard.blocked ? { type: 'output_block' } : {}),
+    });
+    persistAssistantTurn(conversationPromise, first, firstFinalMessage);
 
     // 두 번째 캐릭터 스트리밍
     if (second) {
@@ -524,8 +571,26 @@ app.post('/chat', llmLimiter, async (req, res) => {
 
       const secondValidated = validate({ reply: secondText });
       console.log('second reply:', secondValidated.message?.slice(0, 80));
-      sse('turn_end', { character: second, message: secondValidated.message, emotion: 'neutral' });
-      persistAssistantTurn(conversationPromise, second, secondValidated.message);
+      const secondGuard = await guardOutput(secondValidated.message);
+      const secondFinalMessage = secondGuard.blocked ? OUTPUT_FALLBACK_MESSAGE : secondValidated.message;
+      if (secondGuard.blocked) {
+        console.log(
+          `[output/block] user=${user_id || 'anon'}`,
+          `char=${second}`,
+          `textLen=${secondValidated.message.length}`,
+          `category=${secondGuard.category}`,
+          `source=${secondGuard.source}`,
+        );
+      } else if (secondGuard.failOpen) {
+        console.error(`[output/fail-open] user=${user_id || 'anon'} char=${second} error=${secondGuard.error}`);
+      }
+      sse('turn_end', {
+        character: second,
+        message: secondFinalMessage,
+        emotion: 'neutral',
+        ...(secondGuard.blocked ? { type: 'output_block' } : {}),
+      });
+      persistAssistantTurn(conversationPromise, second, secondFinalMessage);
     }
 
     sse('done',     { end: false });
@@ -588,10 +653,60 @@ ${JSON.stringify(messages || [], null, 2)}`;
   }
 });
 
+// ── "내 데이터 삭제" (개인정보 삭제권 대응) ───────────────────────────────────
+// 인증: x-user-id 헤더. 현재 MVP 에서는 클라이언트 AsyncStorage 의 user_id 를 그대로
+// 받지만, 엔드포인트는 헤더 기반 "me" 구조로 고정. Supabase Auth 도입 시 미들웨어로
+// req.user.id 치환만 하면 됨. 바디의 user_id 는 무시한다(임의 타인 삭제 방지).
+//
+// 선택 바디: { pushToken } — 보조 삭제(레거시 user_id NULL 행 혹은 타 디바이스 토큰 정리).
+//
+// 서버 측 동의 저장분은 없음. 약관/AI 고지/연령 동의는 클라이언트 AsyncStorage 에만
+// 존재하며 프론트에서 로컬 삭제 처리. 서버 crisis/moderation 로그도 user_id 기반
+// 개인 식별은 저장하지 않음(id 문자열만 남음, 원문 미저장).
+app.post('/user/me/delete-data', deleteLimiter, async (req, res) => {
+  const userId = req.headers['x-user-id'];
+  const pushToken = typeof req.body?.pushToken === 'string' ? req.body.pushToken : null;
+
+  if (!userId || typeof userId !== 'string' || userId.length > 128 || !/^[A-Za-z0-9_\-]+$/.test(userId)) {
+    return res.status(400).json({ error: 'x-user-id header required (and must be a valid id)' });
+  }
+
+  try {
+    const result = await deleteUserData(userId, pushToken);
+    console.log(
+      `[user/delete] user=${userId}`,
+      `success=${result.success}`,
+      `deleted=[${result.deleted.join(',')}]`,
+      result.failed.length ? `failed=[${result.failed.map(f => f.table).join(',')}]` : '',
+    );
+    if (!result.success) {
+      return res.status(500).json({
+        success: false,
+        deleted: result.deleted,
+        failed:  result.failed,
+      });
+    }
+    return res.json({ success: true, deleted: result.deleted, counts: result.counts });
+  } catch (e) {
+    console.log(`[user/delete] user=${userId} error=${e.message}`);
+    return res.status(500).json({ success: false, error: e.message });
+  }
+});
+
 app.post('/register-token', registerLimiter, async (req, res) => {
   const { token } = req.body;
+  const headerUid = req.headers['x-user-id'];
+  const bodyUid = typeof req.body?.user_id === 'string' ? req.body.user_id : null;
+  console.log('[register-token] in',
+    'header x-user-id=', headerUid,
+    'body.user_id=', bodyUid,
+    'tokenTail=', typeof token === 'string' ? token.slice(-8) : '(none)',
+  );
   if (!token) return res.status(400).json({ error: 'token required' });
-  await upsertToken(token);
+  const rawUid = (typeof headerUid === 'string' && headerUid) ? headerUid : bodyUid;
+  const userId = (rawUid && /^[A-Za-z0-9_\-]+$/.test(rawUid) && rawUid.length <= 128) ? rawUid : null;
+  if (rawUid && !userId) console.log('[register-token] rawUid rejected by validator:', rawUid);
+  await upsertToken(token, userId);
   const tokens = await readTokens();
   res.json({ ok: true, total: tokens.length });
 });
@@ -1398,7 +1513,9 @@ console.log('[크론] 스케줄러 등록 완료');
 
 if (require.main === module) {
   const PORT = process.env.PORT || 4000;
-  app.listen(PORT, () => console.log(`서버 실행중 port ${PORT}`));
+  app.listen(PORT, '0.0.0.0', () => {
+    console.log(`서버 실행중 port ${PORT}`);
+  });
 }
 
 module.exports = app;

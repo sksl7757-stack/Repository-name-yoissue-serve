@@ -12,6 +12,7 @@ const {
   characterLockRule,
   primaryDirectionRule,
   JSON_FORMAT_RULE,
+  SAFETY_POLICY_RULE,
   stanceContractRule,
   stateRuleFor,
   sessionStanceRuleFor,
@@ -80,6 +81,7 @@ async function buildSystemPrompt(character, memory, {
   const activePrimaryDirection = isMourning ? '' : primaryDirectionRule;
 
   return [
+    SAFETY_POLICY_RULE,
     sessionStanceRule,
     politicalSafetyRule,
     categoryFrameRule,
@@ -130,6 +132,7 @@ async function buildOpeningPairPrompt({ memory, stance }) {
   const jsonFormat = `\n\n【출력 형식 — JSON 고정, 다른 텍스트 없이】\n{\n  "hana":    "하나의 발언 (하나 페르소나, 2~3문장, 하나 쪽 시점 고수)",\n  "junhyuk": "준혁의 발언 (준혁 페르소나, 1~2문장, 준혁 쪽 시점 고수)"\n}\n\n* 두 발언은 서로 대립하되, 각자 자기 쪽만 말할 것\n* 뉴스 요약·중계 금지. 첫 문장부터 자기 관점\n* 한 캐릭터가 양쪽 관점 섞지 말 것`;
 
   return [
+    SAFETY_POLICY_RULE,
     stanceContractRule,
     stanceBlock,
     politicalSafetyRule,
