@@ -80,6 +80,60 @@ const registerLimiter = createLimiter(5, 60 * 1000);
 // 데이터 삭제: 분당 3회 (실수/어뷰즈 방어. 정상 사용은 평생 1~2회)
 const deleteLimiter = createLimiter(3, 60 * 1000);
 
+// ── 유저(device) 기준 레이트리밋 ──────────────────────────────────────────────
+// IP 기반은 통신사 NAT 공유/VPN 로 우회되므로 user_id(=디바이스별 AsyncStorage id) 를
+// 보조 축으로 추가. Supabase Auth 없는 현 구조에서 user_id 는 클라가 만든 문자열이라
+// 위조 가능하지만, 일반 이용자가 앱만 쓰는 한도에선 디바이스당 1개 안정적 — 정상 사용자
+// 간 바이러스성 abuse 차단 목적으로 충분. Auth 도입 후엔 req.user.id 로 교체.
+//
+// 한계: 인-메모리 Map 이라 Railway 재시작 시 카운터 초기화. 공격자가 배포 타이밍 맞추면
+// 우회 가능 — 정교한 방어가 필요해지면 Redis 또는 Upstash 로 이관. 현재 단일 인스턴스 전제.
+
+const USER_LIMIT_BURST     = { limit: 5,  windowMs: 10 * 1000 };  // 10초당 5회
+const USER_LIMIT_SUSTAINED = { limit: 20, windowMs: 60 * 1000 };  // 1분당 20회
+
+function resolveUserKey(req) {
+  // body.user_id → x-user-id 헤더 → IP fallback. 검증 통과한 것만 key 로.
+  const bodyId   = typeof req.body?.user_id === 'string' ? req.body.user_id : '';
+  const headerId = typeof req.headers['x-user-id'] === 'string' ? req.headers['x-user-id'] : '';
+  const raw      = bodyId || headerId;
+  if (raw && /^[A-Za-z0-9_\-]+$/.test(raw) && raw.length <= 128) return { key: `u:${raw}`, kind: 'user_id', id: raw };
+  const ip = req.ip || req.headers['x-forwarded-for'] || 'unknown';
+  return { key: `ip:${ip}`, kind: 'ip_fallback', id: ip };
+}
+
+function createUserLimiter({ limit, windowMs }, label) {
+  const hits = new Map();
+  LIMITER_REGISTRY.push({ map: hits, windowMs });
+  return (req, res, next) => {
+    const { key, kind, id } = resolveUserKey(req);
+    const now = Date.now();
+    const recent = (hits.get(key) || []).filter(t => now - t < windowMs);
+    if (recent.length >= limit) {
+      const ip = req.ip || req.headers['x-forwarded-for'] || 'unknown';
+      console.log(
+        `[ratelimit/user] endpoint=${req.path}`,
+        `limit=${label}`,
+        `kind=${kind}`,
+        `id=${id}`,
+        `ip=${ip}`,
+        `ts=${new Date(now).toISOString()}`,
+      );
+      res.setHeader('Retry-After', Math.ceil(windowMs / 1000));
+      return res.status(429).json({
+        type: 'rate_limit',
+        message: '요청이 너무 많습니다. 잠시 후 다시 시도해 주세요.',
+      });
+    }
+    recent.push(now);
+    hits.set(key, recent);
+    return next();
+  };
+}
+
+const userBurstLimiter     = createUserLimiter(USER_LIMIT_BURST, 'burst');
+const userSustainedLimiter = createUserLimiter(USER_LIMIT_SUSTAINED, 'sustained');
+
 // ── 메시지 sanitizer: 클라이언트 주입 방어 ────────────────────────────────────
 // 외부 입력에서 role=system 등 비허용 롤을 차단하고 content를 문자열로 정규화.
 
@@ -282,7 +336,7 @@ async function decideResponders(messages, primaryChar, secondaryChar, stance) {
 // /chat-init — 앱 시작 시 첫 코멘트용.
 // 일반 모드: DB stance 조회 + generateOpeningPair 1회 호출로 {hana, junhyuk} 동시 생성.
 // 추모 모드: 기존대로 primary 단독 generateReply.
-app.post('/chat-init', llmLimiter, async (req, res) => {
+app.post('/chat-init', llmLimiter, userBurstLimiter, userSustainedLimiter, async (req, res) => {
   const { user_id, character, memory, isMourning = false } = req.body;
 
   const conversationPromise = user_id
@@ -355,7 +409,7 @@ app.post('/chat-init', llmLimiter, async (req, res) => {
 });
 
 // /chat — SSE 스트리밍
-app.post('/chat', llmLimiter, async (req, res) => {
+app.post('/chat', llmLimiter, userBurstLimiter, userSustainedLimiter, async (req, res) => {
   res.setHeader('Content-Type', 'text/event-stream');
   res.setHeader('Cache-Control', 'no-cache');
   res.setHeader('Connection', 'keep-alive');
