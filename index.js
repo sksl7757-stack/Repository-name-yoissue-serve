@@ -10,8 +10,6 @@ const { getState } = require('./stateManager');
 const { generateReply, generateOpeningPair, generateReplyStream, parseOpenAIStream, buildSystemPrompt } = require('./generator');
 const { validate } = require('./validator');
 
-const { saveNews, getSavedNews } = require('./saveNews');
-const { addRecord, getRecords } = require('./records');
 const { supabase, getTodayNews, markNewsDeleted } = require('./supabase');
 const { buildComfyWorkflow } = require('./comfyUtils');
 const { interpretNews }    = require('./newsInterpreter');
@@ -187,39 +185,6 @@ const OPENING_MESSAGES = {
   안보: ['이거 좀 무거운 얘긴데 알아두면 좋아', '이거 우리 일상이랑 완전 먼 얘기는 아니더라', '오늘 안보 쪽 흐름 하나 짚어보면', '이건 한 번 짚고 넘어갈 필요 있음', '이건 장기적으로 영향 있을 내용임'],
   추모: ['오늘은 조용히 전할 소식이 있어', '오늘은 함께 기억할 얘기가 있어', '오늘은 판단보다 마음이 먼저인 얘기야', '오늘은 잠시 조용히 마음 써주자', '함께 기억해야 할 내용임'],
 };
-
-app.post('/chat-opening', llmLimiter, async (req, res) => {
-  const { character, memory, isMourning = false } = req.body;
-  try {
-    const OPENAI_KEY = process.env.OPENAI_API_KEY?.replace(/['"]/g, '');
-    const baseSystem = await buildSystemPrompt(character, memory, { phase: 'INIT', isMourning });
-    // 추모 모드에서는 질문 유도 금지 — 조용히 함께 있는 톤
-    const formatRule = isMourning
-      ? `\n\n【출력 형식】 아래 JSON으로만 반환. 다른 텍스트 없이:\n{"opening": "뉴스 보기 전 조용히 안부 전하는 한 줄 (질문 금지)", "comment": "뉴스 카드 본 후 함께 아파하는 한 줄 (질문 금지, 물음표 금지)"}`
-      : `\n\n【출력 형식】 아래 JSON으로만 반환. 다른 텍스트 없이:\n{"opening": "뉴스 보기 전 궁금증 유발 한 줄", "comment": "뉴스 카드 본 후 생활 영향/공감 한 줄. 반드시 유저가 자연스럽게 대답하고 싶어지는 열린 질문으로 끝낼 것."}`;
-    const systemWithFormat = baseSystem + formatRule;
-
-    const response = await fetch('https://api.openai.com/v1/chat/completions', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${OPENAI_KEY}` },
-      body: JSON.stringify({
-        model: 'gpt-5.4-mini',
-        max_completion_tokens: 200,
-        response_format: { type: 'json_object' },
-        messages: [
-          { role: 'system', content: systemWithFormat },
-          { role: 'user', content: '오늘 뉴스 오프닝이랑 코멘트 만들어줘' },
-        ],
-      }),
-    });
-    const data = await response.json();
-    const result = JSON.parse(data?.choices?.[0]?.message?.content || '{}');
-    res.json({ opening: result.opening || '', comment: result.comment || '' });
-  } catch (e) {
-    console.log('chat-opening 에러:', e.message);
-    res.status(500).json({ error: e.message });
-  }
-});
 
 // ── 응답 캐릭터 결정 (GPT function calling) ──────────────────────────────────
 // returns { first: charName, second: charName | null }
@@ -876,50 +841,6 @@ app.post('/send-notifications', async (req, res) => {
   res.json({ sent, total: messages.length, errors: errors.length, body });
 });
 
-
-app.post('/save-news', async (req, res) => {
-  const { userId, newsId } = req.body;
-  if (!userId || !newsId) return res.status(400).json({ error: 'userId와 newsId 필요' });
-  try {
-    const result = await saveNews(userId, newsId);
-    res.json(result);
-  } catch (e) {
-    res.status(500).json({ error: e.message });
-  }
-});
-
-app.get('/saved-news', async (req, res) => {
-  const { userId } = req.query;
-  if (!userId) return res.status(400).json({ error: 'userId 필요' });
-  try {
-    const list = await getSavedNews(userId);
-    res.json({ savedNews: list });
-  } catch (e) {
-    res.status(500).json({ error: e.message });
-  }
-});
-
-app.post('/records', async (req, res) => {
-  const { userId, newsId, title, character, userChoice, createdAt } = req.body;
-  if (!userId || !newsId) return res.status(400).json({ error: 'userId와 newsId 필요' });
-  try {
-    const result = await addRecord(userId, { newsId, title, character, userChoice, createdAt });
-    res.json(result);
-  } catch (e) {
-    res.status(500).json({ error: e.message });
-  }
-});
-
-app.get('/records', async (req, res) => {
-  const { userId } = req.query;
-  if (!userId) return res.status(400).json({ error: 'userId 필요' });
-  try {
-    const list = await getRecords(userId);
-    res.json({ records: list });
-  } catch (e) {
-    res.status(500).json({ error: e.message });
-  }
-});
 
 
 // ── /generate-image ──────────────────────────────────────────────────────────
