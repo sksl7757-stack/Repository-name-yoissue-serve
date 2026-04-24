@@ -12,7 +12,7 @@ const { validate } = require('./validator');
 
 const { saveNews, getSavedNews } = require('./saveNews');
 const { addRecord, getRecords } = require('./records');
-const { supabase, getTodayNews } = require('./supabase');
+const { supabase, getTodayNews, markNewsDeleted } = require('./supabase');
 const { buildComfyWorkflow } = require('./comfyUtils');
 const { interpretNews }    = require('./newsInterpreter');
 const { buildImagePrompt } = require('./promptBuilder');
@@ -1196,6 +1196,83 @@ app.patch('/redline-log/:date', requireRedlineToken, async (req, res) => {
     res.json({ ok: true, date });
   } catch (e) {
     console.error('[redline-log PATCH]', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ── 뉴스 오보 recall (관리자 삭제) ──────────────────────────────────────────
+// POST /admin/news/delete
+// 헤더: x-admin-key: <ADMIN_SECRET>
+// 바디:  { "news_id": "YYYY-MM-DD" }
+//
+// daily_news 에 별도 id 컬럼이 없어 `date` 컬럼(YYYY-MM-DD)을 news_id 로 사용.
+// Soft delete — is_deleted=true + deleted_at=now() 로 마킹. getTodayNews 가 자동 제외.
+// 인메모리 deny set 도 업데이트해 다음 요청부터 즉시 반영.
+//
+// 인증: ENV ADMIN_SECRET 없으면 모든 요청 500 (설정 누락 알림). 설정되어 있는데 헤더
+// 불일치면 403. 타이밍 공격 방어를 위해 길이 일치 후에만 상수시간 비교하면 이상적이나
+// 내부 관리자용이라 단순 비교로 충분.
+
+const ADMIN_SECRET = (process.env.ADMIN_SECRET || '').trim();
+const DATE_RE_ADMIN = /^\d{4}-\d{2}-\d{2}$/;
+
+function requireAdminKey(req, res, next) {
+  if (!ADMIN_SECRET) {
+    console.error('[admin] ADMIN_SECRET 미설정 — 관리자 API 비활성');
+    return res.status(500).json({ error: 'admin_not_configured' });
+  }
+  const key = req.headers['x-admin-key'];
+  if (typeof key !== 'string' || key !== ADMIN_SECRET) {
+    return res.status(403).json({ error: 'forbidden' });
+  }
+  return next();
+}
+
+app.post('/admin/news/delete', requireAdminKey, async (req, res) => {
+  const newsId = typeof req.body?.news_id === 'string' ? req.body.news_id.trim() : '';
+  if (!DATE_RE_ADMIN.test(newsId)) {
+    return res.status(400).json({ error: 'invalid_news_id', hint: 'YYYY-MM-DD' });
+  }
+
+  try {
+    // 1) 존재 + 현재 상태 확인
+    const { data: existing, error: selErr } = await supabase
+      .from('daily_news')
+      .select('date, is_deleted')
+      .eq('date', newsId)
+      .maybeSingle();
+    if (selErr) throw new Error(selErr.message);
+    if (!existing) {
+      return res.status(404).json({ error: 'not_found', news_id: newsId });
+    }
+
+    // 2) Idempotent — 이미 삭제됐으면 200 OK 로 리턴
+    if (existing.is_deleted) {
+      markNewsDeleted(newsId);
+      console.log(`[admin/news-delete] news_id=${newsId} already_deleted=true admin=true user_id=${req.body?.user_id || '-'}`);
+      return res.json({ ok: true, news_id: newsId, already_deleted: true });
+    }
+
+    // 3) Soft delete
+    const deletedAt = new Date().toISOString();
+    const { error: upErr } = await supabase
+      .from('daily_news')
+      .update({ is_deleted: true, deleted_at: deletedAt })
+      .eq('date', newsId);
+    if (upErr) throw new Error(upErr.message);
+
+    // 4) 인메모리 deny set — 동일 인스턴스 내 즉시 반영
+    markNewsDeleted(newsId);
+
+    console.log(
+      `[admin/news-delete] news_id=${newsId}`,
+      `deleted_at=${deletedAt}`,
+      `admin=true`,
+      `user_id=${req.body?.user_id || '-'}`,
+    );
+    res.json({ ok: true, news_id: newsId, deleted_at: deletedAt });
+  } catch (e) {
+    console.error('[admin/news-delete] error:', e.message);
     res.status(500).json({ error: e.message });
   }
 });
