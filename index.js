@@ -28,6 +28,9 @@ const { detectCrisis, CRISIS_MESSAGE } = require('./services/crisisFilter');
 const { moderateInput, MODERATION_FALLBACK_MESSAGE } = require('./services/inputModeration');
 const { guardOutput, OUTPUT_FALLBACK_MESSAGE } = require('./services/outputGuard');
 const { isElectionMode, detectPoliticalContent, ELECTION_BLOCK_MESSAGE } = require('./services/electionMode');
+const { detectHateContent } = require('./redline');
+
+const REDLINE_BLOCK_MESSAGE = '이 요청에는 답변할 수 없습니다. 다른 방식으로 질문해 주세요.';
 const { deleteUserData } = require('./deleteUserData');
 
 const app = express();
@@ -479,6 +482,33 @@ app.post('/chat', llmLimiter, userBurstLimiter, userSustainedLimiter, async (req
         `textLen=${lastUserMsg.content.length}`,
         `error=${mod.error}`,
       );
+    }
+  }
+
+  // ── 혐오·차별 차단 (REDLINE C 카테고리): moderation 이후, persistence 이전 ────
+  // 장애·LGBTQ·인종·지역·외모 비하 요청이 들어오면 LLM 호출 없이 즉시 중립 응답.
+  // 공통 whitelist(비판·규탄·인권 등) 통과 로직은 detectHateContent 내부에서 처리.
+  if (lastUserMsg) {
+    const hate = detectHateContent(lastUserMsg.content);
+    if (hate.detected) {
+      console.log(
+        `[redline/block] user=${user_id || 'anon'}`,
+        `endpoint=/chat`,
+        `category=${hate.category}`,
+        `matched=${hate.matched}`,
+        `source=redline`,
+        `textLen=${lastUserMsg.content.length}`,
+      );
+      sse('turn_start', { character });
+      sse('token', { character, token: REDLINE_BLOCK_MESSAGE });
+      sse('turn_end', {
+        character,
+        message: REDLINE_BLOCK_MESSAGE,
+        emotion: 'neutral',
+        type: 'redline_block',
+      });
+      sse('done', { end: false });
+      return res.end();
     }
   }
 

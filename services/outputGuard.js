@@ -29,19 +29,27 @@ const OUTPUT_DANGER_PATTERNS = [
 
 const OUTPUT_FALLBACK_MESSAGE = '이 요청에는 답변할 수 없습니다. 다른 방식으로 질문해 주세요.';
 
+const { detectHateContent } = require('../redline');
+
 async function guardOutput(text) {
   if (!text || typeof text !== 'string') {
     return { blocked: false, reason: 'empty' };
   }
 
-  // 1) 키워드 가드 — API 실패에도 동작. 범죄 방법류는 여기서만 잡힌다.
+  // 1) 혐오·차별 (REDLINE C) — 프롬프트 통과했는데 LLM 이 슬러 재생산한 경우 최종 차단.
+  const hate = detectHateContent(text);
+  if (hate.detected) {
+    return { blocked: true, category: `redline/${hate.category}`, source: 'redline', matched: hate.matched };
+  }
+
+  // 2) 키워드 가드 — API 실패에도 동작. 범죄 방법류는 여기서만 잡힌다.
   for (const { pattern, category } of OUTPUT_DANGER_PATTERNS) {
     if (pattern.test(text)) {
       return { blocked: true, category, source: 'fallback-kw' };
     }
   }
 
-  // 2) OpenAI Moderation API
+  // 3) OpenAI Moderation API
   const OPENAI_KEY = process.env.OPENAI_API_KEY?.replace(/['"]/g, '');
   if (!OPENAI_KEY) {
     return { blocked: false, failOpen: true, error: 'no-api-key' };

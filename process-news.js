@@ -11,6 +11,7 @@ const { classifyMourning } = require('./newsInterpreter');
 const { shouldPersistNews, MIN_CONTENT_LENGTH } = require('./newsGate');
 const { updateFinalSelection } = require('./redlineLog');
 const { isElectionMode, filterOutPolitics } = require('./services/electionMode');
+const { detectHateContent } = require('./redline');
 
 loadEnv();
 
@@ -537,6 +538,30 @@ async function main() {
     const beforeCount = pickPool.length;
     pickPool = filterOutPolitics(pickPool);
     console.log(`  🗳️ 선거 모드 — 정치 뉴스 제외: ${beforeCount} → ${pickPool.length}건`);
+  }
+
+  // 5-3. 혐오·차별 본문 필터 — Stage 1 은 제목만 검사해 본문에 숨은 슬러 통과 가능.
+  // 여기서 제목+요약+본문 전체를 C 카테고리(장애·LGBTQ·인종·지역·외모)로 한 번 더 걸러낸다.
+  // 공통 whitelist(차별금지·비판·규탄·인권 등) 덕에 보도·비판 기사는 통과.
+  {
+    const beforeHate = pickPool.length;
+    const droppedHate = [];
+    pickPool = pickPool.filter(item => {
+      const summaryText = Array.isArray(item.summary) ? item.summary.join(' ') : (item.summary || '');
+      const text = `${item.title || ''} ${summaryText} ${item.content || ''}`;
+      const hate = detectHateContent(text);
+      if (hate.detected) {
+        droppedHate.push({ title: item.title, category: hate.category, matched: hate.matched });
+        return false;
+      }
+      return true;
+    });
+    if (droppedHate.length > 0) {
+      console.log(`  🚫 혐오·차별 필터: ${beforeHate} → ${pickPool.length}건`);
+      for (const d of droppedHate) {
+        console.log(`     [${d.category}] matched=${d.matched} title=${d.title}`);
+      }
+    }
   }
 
   // 6. 이력 로드

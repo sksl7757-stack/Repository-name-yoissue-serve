@@ -54,6 +54,14 @@ const anyCheck  = (...checks) => (title) => {
   return null;
 };
 
+// ─── C (혐오·차별) 공통 whitelist ─────────────────────────────────────────
+// 보도·비판·인권 맥락을 과차단하지 않기 위한 공통 키셋. 각 C 카테고리에서 참조.
+const HATE_COMMON_WHITELIST = [
+  '차별 금지', '차별금지법', '혐오 표현', '혐오표현 규제',
+  '비판', '규탄', '비난 여론', '사과', '논란', '피해자',
+  '인권', '인권위', '권리 보호', '보호법', '처벌', '처벌 강화',
+];
+
 // ─── 카테고리 정의 ───────────────────────────────────────────────────────────
 const REDLINE_CATEGORIES = [
   // ─── A (윤리·법적) ──────────────────────────────────────────────────────
@@ -245,6 +253,61 @@ const REDLINE_CATEGORIES = [
     ),
     whitelist: [],
   },
+
+  // ─── C (혐오·차별, 2026-04-24 추가) ────────────────────────────────────
+  // 공통 whitelist: 비판·보도·인권·규탄 맥락은 통과. 기사가 혐오 표현 자체를 다루는
+  // (차별 금지·인권·비판 등) 경우 과차단 방지. 카테고리별로 추가 whitelist 가능.
+  //
+  // 적용 범위: isRedlineTitle (Stage 1 제목) + detectHateContent (본문/채팅/출력).
+  // 개별 정치인·역사 용어와 달리 혐오 표현은 본문에 더 자주 등장해 본문 패스도 필요.
+  {
+    name: 'disability_hate',
+    label: 'C-1 장애비하',
+    check: single([
+      '병신', '저능아', '정박아', '애자', '장애자', '절름발이', '귀머거리',
+    ]),
+    whitelist: HATE_COMMON_WHITELIST,
+  },
+  {
+    name: 'lgbtq_hate',
+    label: 'C-2 성소수자혐오',
+    check: anyCheck(
+      single(['호모새끼', '게이새끼', '레즈년']),
+      // 중립어 + 혐오 술어 조합. "성소수자 치료" / "동성애 질병" 등 비하 프레임.
+      pair(
+        ['성소수자', '게이', '레즈비언', '트랜스젠더', '동성애'],
+        ['혐오', '치료', '교정', '변태', '질병'],
+      ),
+    ),
+    whitelist: HATE_COMMON_WHITELIST,
+  },
+  {
+    name: 'race_nationality_hate',
+    label: 'C-3 인종국적비하',
+    check: single([
+      '짱깨', '쪽발이', '쪽바리', '깜둥이', '니그로', '개슬람', '조센징',
+    ]),
+    whitelist: HATE_COMMON_WHITELIST,
+  },
+  {
+    name: 'region_hate',
+    label: 'C-4 지역비하',
+    // '홍어' 단독은 식재료 오탐 위험 — '홍어족'/'홍어냄새' 같은 compound slur 만.
+    check: single([
+      '전라디언', '경상디언', '개쌍도', '깽깽이', '홍어족', '홍어냄새',
+    ]),
+    whitelist: HATE_COMMON_WHITELIST,
+  },
+  {
+    name: 'appearance_body_shaming',
+    label: 'C-5 외모비하',
+    // 단일 슬러(뚱보·돼지 등)는 일상어 오탐이 커 pair 로만. 중립 명사 + 조롱 술어.
+    check: pair(
+      ['외모', '몸매', '얼굴', '뚱뚱', '살찐', '못생긴', '체형'],
+      ['비하', '조롱', '놀림', '희화화', '비난'],
+    ),
+    whitelist: [...HATE_COMMON_WHITELIST, '외모지상주의', '외모 평가'],
+  },
 ];
 
 // ─── 한국어 라벨 맵 (redlineLog 등 외부에서 카테고리 한국어명 조회용) ─────────
@@ -266,8 +329,30 @@ function isRedlineTitle(title) {
   return { blocked: false, reason: null, matched: null };
 }
 
+// ─── 혐오·차별 감지 (C 카테고리만, 제목+본문 공용) ──────────────────────────
+// - 뉴스 본문(process-news Stage 2), 채팅 입력(/chat), LLM 출력(outputGuard) 공용.
+// - isRedlineTitle 은 A/B/C 전체 순차 매칭 — 제목 레벨 정치·선거도 차단.
+// - detectHateContent 는 C 만 골라 검사 — 정치 키워드 혼재하는 일반 본문·발화에서
+//   정치 매치 오탐 없이 혐오만 잡는다.
+const HATE_CATEGORY_NAMES = new Set([
+  'disability_hate', 'lgbtq_hate', 'race_nationality_hate',
+  'region_hate', 'appearance_body_shaming',
+]);
+
+function detectHateContent(text) {
+  if (!text || typeof text !== 'string') return { detected: false, category: null, matched: null };
+  for (const cat of REDLINE_CATEGORIES) {
+    if (!HATE_CATEGORY_NAMES.has(cat.name)) continue;
+    if (cat.whitelist.length > 0 && cat.whitelist.some(w => text.includes(w))) continue;
+    const matched = cat.check(text);
+    if (matched) return { detected: true, category: cat.name, matched };
+  }
+  return { detected: false, category: null, matched: null };
+}
+
 module.exports = {
   isRedlineTitle,
+  detectHateContent,
   REDLINE_CATEGORIES,
   REDLINE_B_POLITICIANS,
   CATEGORY_LABELS,
