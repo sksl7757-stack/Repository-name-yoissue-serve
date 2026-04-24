@@ -27,6 +27,7 @@ const {
 const { detectCrisis, CRISIS_MESSAGE } = require('./services/crisisFilter');
 const { moderateInput, MODERATION_FALLBACK_MESSAGE } = require('./services/inputModeration');
 const { guardOutput, OUTPUT_FALLBACK_MESSAGE } = require('./services/outputGuard');
+const { isElectionMode, detectPoliticalContent, ELECTION_BLOCK_MESSAGE } = require('./services/electionMode');
 const { deleteUserData } = require('./deleteUserData');
 
 const app = express();
@@ -478,6 +479,31 @@ app.post('/chat', llmLimiter, userBurstLimiter, userSustainedLimiter, async (req
         `textLen=${lastUserMsg.content.length}`,
         `error=${mod.error}`,
       );
+    }
+  }
+
+  // ── 선거 모드 차단: ELECTION_MODE=true 이면 정치 키워드 포함 질문 즉시 차단 ────
+  // moderation 이후, persistence 이전. 뉴스 단계 필터(process-news.js)가 주 방어선이고
+  // 여기는 유저가 자유채팅에서 정치 얘기를 끌고 올 때 방어하는 보조선.
+  if (isElectionMode() && lastUserMsg) {
+    const pol = detectPoliticalContent(lastUserMsg.content);
+    if (pol.detected) {
+      console.log(
+        `[election/block] user=${user_id || 'anon'}`,
+        `endpoint=/chat`,
+        `matched=${pol.matched}`,
+        `textLen=${lastUserMsg.content.length}`,
+      );
+      sse('turn_start', { character });
+      sse('token', { character, token: ELECTION_BLOCK_MESSAGE });
+      sse('turn_end', {
+        character,
+        message: ELECTION_BLOCK_MESSAGE,
+        emotion: 'neutral',
+        type: 'election_block',
+      });
+      sse('done', { end: false });
+      return res.end();
     }
   }
 

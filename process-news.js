@@ -10,6 +10,7 @@ const { todayKST, mmddKST } = require('./dateUtil');
 const { classifyMourning } = require('./newsInterpreter');
 const { shouldPersistNews, MIN_CONTENT_LENGTH } = require('./newsGate');
 const { updateFinalSelection } = require('./redlineLog');
+const { isElectionMode, filterOutPolitics } = require('./services/electionMode');
 
 loadEnv();
 
@@ -528,8 +529,15 @@ async function main() {
 
   // 5-1. Picker 가드 — GPT 선정에만 healthy pool 을 전달.
   // Memorial 은 pool 그대로 (관련 뉴스가 thin 뿐이면 Layer 4 에서 거부 → 어제 row 유지).
-  const pickPool = pool.filter(item => !item.isFallback && (item.content || '').length >= MIN_CONTENT_LENGTH);
+  let pickPool = pool.filter(item => !item.isFallback && (item.content || '').length >= MIN_CONTENT_LENGTH);
   console.log(`  picker 가드 후 (GPT 전용): ${pickPool.length}건`);
+
+  // 5-2. 선거 모드 필터 — ELECTION_MODE=true 면 정치 뉴스 전량 제외.
+  if (isElectionMode()) {
+    const beforeCount = pickPool.length;
+    pickPool = filterOutPolitics(pickPool);
+    console.log(`  🗳️ 선거 모드 — 정치 뉴스 제외: ${beforeCount} → ${pickPool.length}건`);
+  }
 
   // 6. 이력 로드
   const history = await loadHistory();
